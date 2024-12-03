@@ -2,19 +2,17 @@ import {io} from 'socket.io-client'
 import React,{useState,useEffect,useRef} from 'react'
 import { createContext } from 'react'
 
-
 export const SocketContext = createContext();
 
 export const SocketProvider = ({children}) => {
   const socket = io("http://localhost:3000")
-
   const [code,setCode] = useState();
   const [email,setEmail] = useState();
   const [flag,setFlag] = useState(false);
   const [list,setList] = useState([]);
   const [stream,setStream] = useState();  
   const [remoteStream,setStreamVideo] = useState();
-
+  const [isCallAlive,setIsCallAlive] = useState(true);
   let pcRef = useRef(null);
   let dcRef = useRef(null);
 
@@ -38,44 +36,44 @@ export const SocketProvider = ({children}) => {
     const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]}
     const constraints = {'video':true,'audio':true}
     const currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-    pcRef = new RTCPeerConnection(configuration);
+    pcRef.current = new RTCPeerConnection(configuration);
 
     currentStream.getTracks().forEach(track => {
       const video = document.querySelector('#video');
       video.srcObject = currentStream;
-      pcRef.addTrack(track,currentStream);
+      pcRef.current.addTrack(track,currentStream);
     });
 
-    pcRef.addEventListener('track', async (event) => {
-      const remoteVideo = document.querySelector('#remoteVideo');
-      const [remoteStream] = event.streams;
-      remoteVideo.srcObject = remoteStream;
+    pcRef.current.addEventListener('track', async (event) => {
+        const remoteVideo = document.querySelector('#remoteVideo');
+        const [remoteStream] = event.streams;
+        remoteVideo.srcObject = remoteStream;
     });
 
-    dcRef.current = pcRef.createDataChannel("channel");
+    dcRef.current = pcRef.current.createDataChannel("channel");
     dcRef.current.onopen = () => setFlag(true);
     dcRef.current.onmessage = (event) => console.log("Message received:", event.data);    
 
 
-    pcRef.addEventListener('icecandidate', event => {
+    pcRef.current.addEventListener('icecandidate', event => {
       if (event.candidate) {
         // console.log("icecandidate update new SDP: " + JSON.stringify(pcRef.localDescription))
         console.log("change of icecandidate")
         socket.emit("icecandidate",event.candidate,code)
       }
     });
-    pcRef.addEventListener('datachannel', event => {
+    pcRef.current.addEventListener('datachannel', event => {
       const dataChannel = event.channel;
     });
 
-    pcRef.addEventListener('connectionstatechange', event => {
+    pcRef.current.addEventListener('connectionstatechange', event => {
       if (pcRef.connectionState === 'connected') {
         console.log('connection success')
         
       }
     });
-    const offer = await pcRef.createOffer();
-    await pcRef.setLocalDescription(offer)
+    const offer = await pcRef.current.createOffer();
+    await pcRef.current.setLocalDescription(offer)
     console.log("localDesp set")
     console.log(offer)
     socket.emit("offer",offer,code);
@@ -85,46 +83,46 @@ export const SocketProvider = ({children}) => {
     const constraints = {'video':true,'audio':true}
     const currentStream = await navigator.mediaDevices.getUserMedia(constraints);
     console.log(currentStream)
-    pcRef = new RTCPeerConnection(configuration);
+    pcRef.current = new RTCPeerConnection(configuration);
     
     currentStream.getTracks().forEach(track => {
       const video = document.querySelector('#video');
       video.srcObject = currentStream;
-      pcRef.addTrack(track,currentStream);
+      pcRef.current.addTrack(track,currentStream);
     });
 
-    pcRef.addEventListener('track', async (event) => {
-      const remoteVideo = document.querySelector('#remoteVideo');
-      const [remoteStream] = event.streams;
-      remoteVideo.srcObject = remoteStream;
+    pcRef.current.addEventListener('track', async (event) => {
+        const remoteVideo = document.querySelector('#remoteVideo');
+        const [remoteStream] = event.streams;
+        remoteVideo.srcObject = remoteStream;
     });
   
-    pcRef.ondatachannel = e =>{
+    pcRef.current.ondatachannel = e =>{
       dcRef.current = e.channel;
       dcRef.current.onopen = () => setFlag(true);
       dcRef.current.onmessage = (event) => console.log("Message received:", event.data);    
     }
 
-    pcRef.addEventListener('datachannel', event => {
+    pcRef.current.addEventListener('datachannel', event => {
       const dataChannel = event.channel;
     });
-    pcRef.addEventListener('icecandidate', event => {
+    pcRef.current.addEventListener('icecandidate', event => {
       if (event.candidate) {
         console.log("change of icecandidate")
         socket.emit("icecandidate",event.candidate,code)
       }
     });
       // Listen for connectionstatechange on the local RTCPeerConnection
-    pcRef.addEventListener('connectionstatechange', event => {
-        if (pcRef.connectionState === 'connected') {
+    pcRef.current.addEventListener('connectionstatechange', event => {
+        if (pcRef.current.connectionState === 'connected') {
           console.log('connection success')
           videoCapture();
         }
     });
 
-    pcRef.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pcRef.createAnswer();
-    await pcRef.setLocalDescription(answer)
+    pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pcRef.current.createAnswer();
+    await pcRef.current.setLocalDescription(answer)
     console.log("localDesp set")
     console.log(answer)
     console.log('answer created')
@@ -140,9 +138,21 @@ export const SocketProvider = ({children}) => {
   };
 
   const setAnswer = async (answer)=>{
-    await pcRef.setRemoteDescription(new RTCSessionDescription(answer))
+    await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer))
     console.log('remote answer recieved and set')
   }  
+
+  const endCall = async () => {
+    if (pcRef.current) {
+        setIsCallAlive(false);
+        console.log(pcRef.current);
+        pcRef.current.close(); // Properly close the connection
+        pcRef.current = null; // Reset the ref to null
+        socket.emit('endcall',code)
+    } else {
+        console.error("pcRef is not initialized or already closed.");
+    }
+};
 
   useEffect(() => {
     socket.on('enter',(email,code)=>{
@@ -151,16 +161,20 @@ export const SocketProvider = ({children}) => {
     });
     socket.on('offer',(offer,code)=>{
       answerCall(offer);
-    })
+    });
     socket.on('answer',(answer,code)=>{
       setAnswer(answer);
-    })
+    });
     socket.on('icecandidate',async (candidate,code)=>{
       try {
-        await pcRef.addIceCandidate(candidate);;
+        await pcRef.current.addIceCandidate(candidate);;
     } catch (e) {
         console.error('Error adding received ice candidate', e);
     }
+    });
+    socket.on('endcall',(code)=>{
+      endCall();
+      console.log('user disconnected, call was ended')
     })
   }, [socket])
   
@@ -171,6 +185,7 @@ export const SocketProvider = ({children}) => {
         email,
         setEmail,
         socket,
+        isCallAlive,
         handleJoin,
         makeCall,
         pcRef,
@@ -178,6 +193,7 @@ export const SocketProvider = ({children}) => {
         flag,
         streamRef,
         handleMSG,
+        endCall,
       }
       }>
         {children}

@@ -29,6 +29,9 @@ io.on("connection", (socket)=>{
 	socket.on('icecandidate',(candidate,code)=>{
 		console.log(candidate)
 		socket.to(code).emit('icecandidate',candidate,code)
+	});
+	socket.on('endcall',(code)=>{
+		socket.to(code).emit('endcall');
 	})
 	socket.on("disconnect", () => {
 		console.log(`user disconnected`)

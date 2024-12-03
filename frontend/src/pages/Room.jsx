@@ -4,15 +4,19 @@ import { FaMessage } from "react-icons/fa6";
 import { BsCameraReels } from "react-icons/bs";
 import { FaMicrophone } from "react-icons/fa";
 import { ImPhoneHangUp } from "react-icons/im";
-
+import {useNavigate} from 'react-router-dom'
 const Room = () => {
-  const {email,code,makeCall,handleJoin,dcRef,flag,handleMSG,streamRef,remoteRef,videoCapture,stream} = useContext(SocketContext);
+  const navigate = useNavigate();
+  const {email,code,makeCall,handleJoin,dcRef,flag,handleMSG,streamRef,remoteRef,videoCapture,stream,endCall,isCallAlive} = useContext(SocketContext);
   const [msg,setMsg] = useState('');
   const [msgBool,setMsgBool] = useState(false);
   const sendMsg = ()=>{
     handleMSG(msg);
   }
- 
+  const handleEndCall =async ()=>{
+    endCall();
+    navigate('/')
+  }
   useEffect(()=>{
     handleJoin(email,code);
   },[])
@@ -33,9 +37,12 @@ const Room = () => {
         <div className = 'w-full md:w-1/2 h-3/4 rounded bg-zinc-700'>
           <video  id='video' className='video p-2 w-full h-full' autoPlay muted src={stream}/>
         </div>
-        <div className = 'remote w-full md:w-1/2 h-3/4 rounded bg-zinc-700'>
-          <video id='remoteVideo' className='video p-2 w-full h-full' autoPlay src={stream}/>
-        </div>
+        {
+          isCallAlive &&
+          <div className = 'remote w-full md:w-1/2 h-3/4 rounded bg-zinc-700'>
+            <video id='remoteVideo' className='video p-2 w-full h-full' autoPlay src={stream}/>
+          </div>
+        }
       </div>
       <div className="navigation absolute bottom-0 flex gap-5 justify-around bg-zinc-600 w-full">
         <button onClick={(e)=>setMsgBool(value=>!value)} className='m-2 text-white text-2xl hover:text-sky-700 duration-100 ease-out'><FaMessage /></button>
@@ -57,7 +64,7 @@ const Room = () => {
             <div className="camera m-2 text-2xl hover:text-sky-700 duration-100 ease-out">
               <FaMicrophone />
             </div>
-            <div className="camera m-2 text-red-500 text-2xl hover:text-red-700 duration-100 ease-out">
+            <div onClick={handleEndCall} className="camera m-2 text-red-500 text-2xl hover:text-red-700 duration-100 ease-out">
               <ImPhoneHangUp/>
             </div>
             </>
