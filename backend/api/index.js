@@ -12,7 +12,9 @@ const  io = new Server(server,{
 		  methods: ["GET", "POST"]
 		}
 });
-
+app.get("/", (req, res) => {
+  res.send("server is running")
+});
 io.on("connection", (socket)=>{
 	console.log(`user connected`)
 	
