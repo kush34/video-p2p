@@ -10,9 +10,11 @@ export const SocketProvider = ({children}) => {
   const [email,setEmail] = useState();
   const [flag,setFlag] = useState(false);
   const [list,setList] = useState([]);
-  const [stream,setStream] = useState();  
+  const [streams, setStreams] = useState([]);
   const [remoteStream,setStreamVideo] = useState();
   const [isCallAlive,setIsCallAlive] = useState(true);
+  const [displayShare,setDisplayShare] = useState(false);
+  const [remoteDisplayShare,setRemoteDisplayShare] = useState(false);
   let pcRef = useRef(null);
   let dcRef = useRef(null);
 
@@ -20,14 +22,6 @@ export const SocketProvider = ({children}) => {
   let streamRef = useRef(null);
   let remoteRef = useRef(null);
 
-  async function videoCapture(){
-    try {
-        
-
-    } catch(error) {
-        console.error('Error accessing media devices.', error);
-    }
-  }
  
   const handleJoin = async (email,code)=>{
     socket.emit('enter',email,code);
@@ -43,18 +37,31 @@ export const SocketProvider = ({children}) => {
       video.srcObject = currentStream;
       pcRef.current.addTrack(track,currentStream);
     });
+    const remoteTracks = new Set();
+    pcRef.current.ontrack = (event) => {
+      remoteTracks.add(event.track);
+      console.log('Received remote track:', event.track?.kind, event.track?.id);
 
-    pcRef.current.addEventListener('track', async (event) => {
-        const remoteVideo = document.querySelector('#remoteVideo');
-        const [remoteStream] = event.streams;
-        remoteVideo.srcObject = remoteStream;
-    });
+      console.log('All received tracks so far:');
+      remoteTracks.forEach((track) => console.log(track?.kind, track?.id));
 
+      // Create a MediaStream for this track
+    const mediaStream = new MediaStream([event.track]);
+
+    setStreams((prevStreams) => [...prevStreams, { kind: event.track.kind, mediaStream }]);
+  };
+  
     dcRef.current = pcRef.current.createDataChannel("channel");
     dcRef.current.onopen = () => setFlag(true);
     dcRef.current.onmessage = (event) => console.log("Message received:", event.data);    
 
-
+    pcRef.current.onnegotiationneeded = async () => {
+      console.log('negotiation fired')
+      const offer = await pcRef.current.createOffer();
+      await pcRef.current.setLocalDescription(offer);
+      socket.emit('new-offer', offer, code); // Signal the new offer
+    };
+    
     pcRef.current.addEventListener('icecandidate', event => {
       if (event.candidate) {
         // console.log("icecandidate update new SDP: " + JSON.stringify(pcRef.localDescription))
@@ -90,12 +97,27 @@ export const SocketProvider = ({children}) => {
       video.srcObject = currentStream;
       pcRef.current.addTrack(track,currentStream);
     });
+    pcRef.current.onnegotiationneeded = async () => {
+      console.log('negotiation fired');
+      const offer = await pcRef.current.createOffer();
+      await pcRef.current.setLocalDescription(offer);
+      socket.emit('new-offer', offer, code); // Signal the new offer
+    };
+    const remoteTracks = new Set();
 
-    pcRef.current.addEventListener('track', async (event) => {
-        const remoteVideo = document.querySelector('#remoteVideo');
-        const [remoteStream] = event.streams;
-        remoteVideo.srcObject = remoteStream;
-    });
+    pcRef.current.ontrack = (event) => {
+        remoteTracks.add(event.track);
+        console.log('Received remote track:', event.track?.kind, event.track?.id);
+
+        console.log('All received tracks so far:');
+        remoteTracks.forEach((track) => console.log(track?.kind, track?.id));
+
+        // Create a MediaStream for this track
+      const mediaStream = new MediaStream([event.track]);
+
+      setStreams((prevStreams) => [...prevStreams, { kind: event.track.kind, mediaStream }]);
+    };
+  
   
     pcRef.current.ondatachannel = e =>{
       dcRef.current = e.channel;
@@ -116,7 +138,6 @@ export const SocketProvider = ({children}) => {
     pcRef.current.addEventListener('connectionstatechange', event => {
         if (pcRef.current.connectionState === 'connected') {
           console.log('connection success')
-          videoCapture();
         }
     });
 
@@ -140,20 +161,48 @@ export const SocketProvider = ({children}) => {
   const setAnswer = async (answer)=>{
     await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer))
     console.log('remote answer recieved and set')
-  }  
-
-  const endCall = async () => {
-    if (pcRef.current) {
-        setIsCallAlive(false);
-        console.log(pcRef.current);
-        pcRef.current.close(); // Properly close the connection
-        pcRef.current = null; // Reset the ref to null
-        socket.emit('endcall',code)
-    } else {
-        console.error("pcRef is not initialized or already closed.");
+  };  
+  const captureScreen =async ()=>{
+    try{
+      const dispStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      dispStream.getTracks().forEach((track) => {
+          pcRef.current.addTrack(track, dispStream);
+      });
+      const userDispVideo = document.querySelector('#displayUser');
+      if (dispStream) {
+        userDispVideo.srcObject = dispStream; // 'stream' is your MediaStream
+      } else {
+        console.error("Element not found");
+      }
+      setDisplayShare(true);
     }
-};
-
+  catch(err){
+    console.log(err);
+  }
+  }
+    const endCall = async () => {
+      if (pcRef.current) {
+          setIsCallAlive(false);
+          console.log(pcRef.current);
+          pcRef.current.close(); // Properly close the connection
+          pcRef.current = null; // Reset the ref to null
+          socket.emit('endcall',code)
+      } else {
+          console.error("pcRef is not initialized or already closed.");
+      }
+  };
+  //handles SDP update when new stream is added and emits the new answer
+  const handleSDPUpdate = async (offer)=>{
+    pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pcRef.current.createAnswer();
+    await pcRef.current.setLocalDescription(answer);
+    socket.emit('new-answer',answer,code);
+  }
+  //set the new-answer as remote descrotion
+  const UpdatedSDPAnswer= async (answer)=>{
+    pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+    console.log('new answer set')
+  }
   useEffect(() => {
     socket.on('enter',(email,code)=>{
       console.log("new-user joined " + email);
@@ -172,6 +221,14 @@ export const SocketProvider = ({children}) => {
         console.error('Error adding received ice candidate', e);
     }
     });
+    socket.on('new-offer',(offer,code)=>{
+      console.log('new offer recieved');
+      handleSDPUpdate(offer);
+    });
+    socket.on('new-answer',(answer,code)=>{
+      console.log('new answer revieved');
+      UpdatedSDPAnswer(answer);
+    });
     socket.on('endcall',(code)=>{
       endCall();
       console.log('user disconnected, call was ended')
@@ -184,6 +241,9 @@ export const SocketProvider = ({children}) => {
         setCode,
         email,
         setEmail,
+        displayShare,
+        streams,
+        remoteDisplayShare,
         socket,
         isCallAlive,
         handleJoin,
@@ -193,6 +253,7 @@ export const SocketProvider = ({children}) => {
         flag,
         streamRef,
         handleMSG,
+        captureScreen,
         endCall,
       }
       }>

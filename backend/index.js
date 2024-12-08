@@ -22,12 +22,20 @@ io.on("connection", (socket)=>{
 	});
 	socket.on('offer',(offer,code)=>{
 		socket.to(code).emit('offer',offer,code);
-	})
+	});
+	socket.on('new-offer',(offer,code)=>{
+		console.log(`new offer recieved`)
+		socket.to(code).emit('new-offer',offer,code);
+	});
 	socket.on('answer',(answer,code)=>{
 		socket.to(code).emit('answer',answer,code)
 	});
+	socket.on('new-answer',(answer,code)=>{
+		console.log(`new answer recieved`)
+		socket.to(code).emit('new-answer',answer,code)
+	});
 	socket.on('icecandidate',(candidate,code)=>{
-		console.log(candidate)
+		// console.log(candidate)
 		socket.to(code).emit('icecandidate',candidate,code)
 	});
 	socket.on('endcall',(code)=>{
