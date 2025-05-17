@@ -5,7 +5,7 @@ import { createContext } from 'react'
 export const SocketContext = createContext();
 
 export const SocketProvider = ({children}) => {
-  const socket = io("http://localhost:3000")
+  const socket = io(`${import.meta.env.VITE_Socket_URL}`)
   const [code,setCode] = useState();
   const [email,setEmail] = useState();
   const [flag,setFlag] = useState(false);
