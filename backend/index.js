@@ -9,14 +9,19 @@ var corsOptions = {
 	origin: process.env.Frontend_URL,
 	optionsSuccessStatus: 200
 };
-app.use(cors(corsOptions));
+app.use(
+    cors({
+        origin: `${process.env.Frontend_URL}`, 
+        credentials: true,
+    })
+);
 const server  = http.createServer(app);
-const  io = new Server(server,{
-		cors: {
-		  origin: process.env.Frontend_URL,
-		  methods: ["GET", "POST"]
-		}
-});
+const io = new Server(server,{
+    cors: {
+      origin: process.env.Frontend_URL,
+      credentials: true,
+    },
+  });
 
 io.on("connection", (socket)=>{
 	console.log(`user connected`)
@@ -50,7 +55,6 @@ io.on("connection", (socket)=>{
 		console.log(`user disconnected`)
 	});
 })
-
 
 server.listen(3000,()=>{
 	console.log(`listening on :3000`);
