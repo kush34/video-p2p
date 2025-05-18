@@ -5,7 +5,11 @@ import cors from 'cors';
 import http from 'http';
 
 const app = express();
-
+var corsOptions = {
+	origin: process.env.Frontend_URL,
+	optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 const server  = http.createServer(app);
 const  io = new Server(server,{
 		cors: {
