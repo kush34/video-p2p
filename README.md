@@ -1,4 +1,4 @@
-# Video-P2P: Peer-to-Peer Video Conferencing Application
+# Peer-to-Peer Video Conferencing Application
 
 Video-P2P is a lightweight, browser-based video conferencing application designed to facilitate seamless peer-to-peer communication. The application utilizes WebRTC technology for real-time audio, video, and data exchange directly between users without relying on a centralized server for media streaming.
 
