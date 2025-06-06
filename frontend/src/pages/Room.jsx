@@ -52,7 +52,7 @@ const Room = () => {
             id="video"
             className="video p-2 w-full h-full"
             autoPlay
-            // muted
+            muted
           />
         </div>
         {streams.map((stream, index) => (
@@ -64,7 +64,7 @@ const Room = () => {
             <video
               className="video p-2 w-full h-full"
               autoPlay
-              muted={index === 0} // Optional: Mute the first video
+              // muted={index === 0} // Optional: Mute the first video
               ref={(videoElement) => {
                 if (videoElement && !videoElement.srcObject) {
                   videoElement.srcObject = stream.mediaStream;
