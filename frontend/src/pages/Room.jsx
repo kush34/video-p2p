@@ -52,7 +52,7 @@ const Room = () => {
             id="video"
             className="video p-2 w-full h-full"
             autoPlay
-            muted
+            // muted
           />
         </div>
         {streams.map((stream, index) => (
