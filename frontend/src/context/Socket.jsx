@@ -1,249 +1,358 @@
-import {io} from 'socket.io-client'
-import React,{useState,useEffect,useRef} from 'react'
-import { createContext } from 'react'
+import { io } from 'socket.io-client';
+import React, { useState, useEffect, useRef, useCallback, createContext } from 'react';
 
 export const SocketContext = createContext();
 
-export const SocketProvider = ({children}) => {
-  const socket = io(`${import.meta.env.VITE_Socket_URL}`)
-  const [code,setCode] = useState();
-  const [email,setEmail] = useState();
-  const [flag,setFlag] = useState(false);
-  const [list,setList] = useState([]);
+const socket = io(`${import.meta.env.VITE_Socket_URL}`, {
+  autoConnect: true,
+  reconnectionAttempts: 5,
+});
+
+const RTC_CONFIG = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+};
+
+const MEDIA_CONSTRAINTS = { video: true, audio: true };
+
+export const SocketProvider = ({ children }) => {
+  const [code, setCode] = useState();
+  const [email, setEmail] = useState();
+  const [flag, setFlag] = useState(false);
   const [streams, setStreams] = useState([]);
-  const [remoteStream,setStreamVideo] = useState();
-  const [isCallAlive,setIsCallAlive] = useState(true);
-  const [displayShare,setDisplayShare] = useState(false);
-  const [remoteDisplayShare,setRemoteDisplayShare] = useState(false);
-  let pcRef = useRef(null);
-  let dcRef = useRef(null);
+  const [isCallAlive, setIsCallAlive] = useState(false);
+  const [displayShare, setDisplayShare] = useState(false);
+  const [remoteDisplayShare, setRemoteDisplayShare] = useState(false);
 
+  const pcRef = useRef(null);
+  const dcRef = useRef(null);
+  const localStreamRef = useRef(null); // tracks the local camera/mic stream
+  const screenStreamRef = useRef(null); // tracks the screen share stream
+  const codeRef = useRef(null); // always-current code for use inside callbacks
 
-  let streamRef = useRef(null);
-  let remoteRef = useRef(null);
+  // Keep codeRef in sync so socket callbacks always have the latest value
+  useEffect(() => {
+    codeRef.current = code;
+  }, [code]);
 
- 
-  const handleJoin = async (email,code)=>{
-    socket.emit('enter',email,code);
-  } 
-  const makeCall = async (code)=>{
-    const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]}
-    const constraints = {'video':true,'audio':true}
-    const currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-    pcRef.current = new RTCPeerConnection(configuration);
+  // ─── Media helpers ──────────────────────────────────────────────────────────
 
-    currentStream.getTracks().forEach(track => {
-      const video = document.querySelector('#video');
-      video.srcObject = currentStream;
-      pcRef.current.addTrack(track,currentStream);
-    });
-    const remoteTracks = new Set();
-    pcRef.current.ontrack = (event) => {
-      remoteTracks.add(event.track);
-      console.log('Received remote track:', event.track?.kind, event.track?.id);
-
-      console.log('All received tracks so far:');
-      remoteTracks.forEach((track) => console.log(track?.kind, track?.id));
-
-      // Create a MediaStream for this track
-    const mediaStream = new MediaStream([event.track]);
-
-    setStreams((prevStreams) => [...prevStreams, { kind: event.track.kind, mediaStream }]);
+  const stopStream = (streamRef) => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
   };
-  
-    dcRef.current = pcRef.current.createDataChannel("channel");
-    dcRef.current.onopen = () => setFlag(true);
-    dcRef.current.onmessage = (event) => console.log("Message received:", event.data);    
 
-    pcRef.current.onnegotiationneeded = async () => {
-      console.log('negotiation fired')
-      const offer = await pcRef.current.createOffer();
-      await pcRef.current.setLocalDescription(offer);
-      socket.emit('new-offer', offer, code); // Signal the new offer
-    };
-    
-    pcRef.current.addEventListener('icecandidate', event => {
-      if (event.candidate) {
-        // console.log("icecandidate update new SDP: " + JSON.stringify(pcRef.localDescription))
-        console.log("change of icecandidate")
-        socket.emit("icecandidate",event.candidate,code)
-      }
-    });
-    pcRef.current.addEventListener('datachannel', event => {
-      const dataChannel = event.channel;
-    });
+  const attachLocalVideo = (stream) => {
+    const video = document.querySelector('#video');
+    if (video) video.srcObject = stream;
+  };
 
-    pcRef.current.addEventListener('connectionstatechange', event => {
-      if (pcRef.connectionState === 'connected') {
-        console.log('connection success')
-        
-      }
-    });
-    const offer = await pcRef.current.createOffer();
-    await pcRef.current.setLocalDescription(offer)
-    console.log("localDesp set")
-    console.log(offer)
-    socket.emit("offer",offer,code);
-  }
-  const answerCall = async (offer)=>{
-    const configuration = {'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]}
-    const constraints = {'video':true,'audio':true}
-    const currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-    console.log(currentStream)
-    pcRef.current = new RTCPeerConnection(configuration);
-    
-    currentStream.getTracks().forEach(track => {
-      const video = document.querySelector('#video');
-      video.srcObject = currentStream;
-      pcRef.current.addTrack(track,currentStream);
-    });
-    pcRef.current.onnegotiationneeded = async () => {
-      console.log('negotiation fired');
-      const offer = await pcRef.current.createOffer();
-      await pcRef.current.setLocalDescription(offer);
-      socket.emit('new-offer', offer, code); // Signal the new offer
-    };
-    const remoteTracks = new Set();
+  // ─── Core cleanup ───────────────────────────────────────────────────────────
 
-    pcRef.current.ontrack = (event) => {
-        remoteTracks.add(event.track);
-        console.log('Received remote track:', event.track?.kind, event.track?.id);
+  /**
+   * Tears down the peer connection, data channel, and all local media tracks.
+   * Safe to call multiple times.
+   */
+  const cleanupCall = useCallback(() => {
+    // Stop data channel
+    if (dcRef.current) {
+      dcRef.current.close();
+      dcRef.current = null;
+    }
 
-        console.log('All received tracks so far:');
-        remoteTracks.forEach((track) => console.log(track?.kind, track?.id));
+    // Close peer connection
+    if (pcRef.current) {
+      pcRef.current.ontrack = null;
+      pcRef.current.onicecandidate = null;
+      pcRef.current.ondatachannel = null;
+      pcRef.current.onnegotiationneeded = null;
+      pcRef.current.onconnectionstatechange = null;
+      pcRef.current.close();
+      pcRef.current = null;
+    }
 
-        // Create a MediaStream for this track
+    // Stop all local media tracks so camera/mic indicators go off
+    stopStream(localStreamRef);
+    stopStream(screenStreamRef);
+
+    // Clear local video element
+    const video = document.querySelector('#video');
+    if (video) {
+      video.srcObject = null;
+    }
+
+    setStreams([]);
+    setFlag(false);
+    setIsCallAlive(false);
+    setDisplayShare(false);
+  }, []);
+
+  // ─── PeerConnection factory ─────────────────────────────────────────────────
+
+  const createPeerConnection = useCallback(() => {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+
+    pc.ontrack = (event) => {
+      console.log('Received remote track:', event.track.kind, event.track.id);
       const mediaStream = new MediaStream([event.track]);
-
-      setStreams((prevStreams) => [...prevStreams, { kind: event.track.kind, mediaStream }]);
+      setStreams((prev) => [...prev, { kind: event.track.kind, mediaStream }]);
     };
-  
-  
-    pcRef.current.ondatachannel = e =>{
-      dcRef.current = e.channel;
-      dcRef.current.onopen = () => setFlag(true);
-      dcRef.current.onmessage = (event) => console.log("Message received:", event.data);    
-    }
 
-    pcRef.current.addEventListener('datachannel', event => {
-      const dataChannel = event.channel;
-    });
-    pcRef.current.addEventListener('icecandidate', event => {
+    pc.addEventListener('icecandidate', (event) => {
       if (event.candidate) {
-        console.log("change of icecandidate")
-        socket.emit("icecandidate",event.candidate,code)
+        socket.emit('icecandidate', event.candidate, codeRef.current);
       }
     });
-      // Listen for connectionstatechange on the local RTCPeerConnection
-    pcRef.current.addEventListener('connectionstatechange', event => {
-        if (pcRef.current.connectionState === 'connected') {
-          console.log('connection success')
-        }
+
+    pc.addEventListener('connectionstatechange', () => {
+      console.log('Connection state:', pc.connectionState);
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        console.warn('Peer connection lost — cleaning up');
+        cleanupCall();
+      }
     });
 
-    pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pcRef.current.createAnswer();
-    await pcRef.current.setLocalDescription(answer)
-    console.log("localDesp set")
-    console.log(answer)
-    console.log('answer created')
-    socket.emit("answer",answer,code);
-  }
-  const handleMSG = (message) => {
-    if (dcRef.current && dcRef.current.readyState === "open") {
-        dcRef.current.send(message);
-        console.log("Message sent:", message);
-    } else {
-        console.error("Data Channel is not open");
-    }
-  };
+    return pc;
+  }, [cleanupCall]);
 
-  const setAnswer = async (answer)=>{
-    await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer))
-    console.log('remote answer recieved and set')
-  };  
-  const captureScreen =async ()=>{
-    try{
-      const dispStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      dispStream.getTracks().forEach((track) => {
-          pcRef.current.addTrack(track, dispStream);
-      });
-      const userDispVideo = document.querySelector('#displayUser');
-      if (dispStream) {
-        userDispVideo.srcObject = dispStream; // 'stream' is your MediaStream
-      } else {
-        console.error("Element not found");
-      }
-      setDisplayShare(true);
+  // ─── Get local media ────────────────────────────────────────────────────────
+
+  /**
+   * Returns the existing local stream if already running, otherwise requests
+   * camera+mic and attaches it to the local <video id="video"> element.
+   * This means the user sees themselves as soon as they join, even before
+   * any peer connects.
+   */
+  const getLocalStream = useCallback(async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+    const stream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS);
+    localStreamRef.current = stream;
+    attachLocalVideo(stream);
+    return stream;
+  }, []);
+
+  // ─── Caller side ────────────────────────────────────────────────────────────
+
+  const makeCall = useCallback(async (roomCode) => {
+    try {
+      const stream = await getLocalStream(); // reuses stream if already running
+      const pc = createPeerConnection();
+      pcRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      // Data channel — caller creates it
+      const dc = pc.createDataChannel('channel');
+      dcRef.current = dc;
+      dc.onopen = () => setFlag(true);
+      dc.onclose = () => setFlag(false);
+      dc.onmessage = (e) => console.log('Message received:', e.data);
+
+      pc.onnegotiationneeded = async () => {
+        console.log('onnegotiationneeded fired');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('new-offer', offer, roomCode);
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('offer', offer, roomCode);
+      setIsCallAlive(true);
+    } catch (err) {
+      console.error('makeCall failed:', err);
+      cleanupCall();
     }
-  catch(err){
-    console.log(err);
-  }
-  }
-    const endCall = async () => {
-      if (pcRef.current) {
-          setIsCallAlive(false);
-          console.log(pcRef.current);
-          pcRef.current.close(); // Properly close the connection
-          pcRef.current = null; // Reset the ref to null
-          socket.emit('endcall',code)
-      } else {
-          console.error("pcRef is not initialized or already closed.");
-      }
-  };
-  //handles SDP update when new stream is added and emits the new answer
-  const handleSDPUpdate = async (offer)=>{
-    pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
+  }, [getLocalStream, createPeerConnection, cleanupCall]);
+
+  // ─── Callee side ────────────────────────────────────────────────────────────
+
+  const answerCall = useCallback(async (offer) => {
+    try {
+      const stream = await getLocalStream(); // reuses stream if already running
+      const pc = createPeerConnection();
+      pcRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      // Data channel — callee receives it
+      pc.ondatachannel = (e) => {
+        dcRef.current = e.channel;
+        dcRef.current.onopen = () => setFlag(true);
+        dcRef.current.onclose = () => setFlag(false);
+        dcRef.current.onmessage = (ev) => console.log('Message received:', ev.data);
+      };
+
+      pc.onnegotiationneeded = async () => {
+        console.log('onnegotiationneeded fired (callee)');
+        const renegOffer = await pc.createOffer();
+        await pc.setLocalDescription(renegOffer);
+        socket.emit('new-offer', renegOffer, codeRef.current);
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('answer', answer, codeRef.current);
+      setIsCallAlive(true);
+    } catch (err) {
+      console.error('answerCall failed:', err);
+      cleanupCall();
+    }
+  }, [createPeerConnection, cleanupCall]);
+
+  // ─── SDP renegotiation ──────────────────────────────────────────────────────
+
+  const handleSDPUpdate = useCallback(async (offer) => {
+    if (!pcRef.current) return;
+    await pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pcRef.current.createAnswer();
     await pcRef.current.setLocalDescription(answer);
-    socket.emit('new-answer',answer,code);
-  }
-  //set the new-answer as remote descrotion
-  const UpdatedSDPAnswer= async (answer)=>{
-    pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-    console.log('new answer set')
-  }
-  useEffect(() => {
-    socket.on('enter',(email,code)=>{
-      console.log("new-user joined " + email);
-      makeCall(code)
-    });
-    socket.on('offer',(offer,code)=>{
-      answerCall(offer);
-    });
-    socket.on('answer',(answer,code)=>{
-      setAnswer(answer);
-    });
-    socket.on('icecandidate',async (candidate,code)=>{
-      try {
-        await pcRef.current.addIceCandidate(candidate);;
-    } catch (e) {
-        console.error('Error adding received ice candidate', e);
+    socket.emit('new-answer', answer, codeRef.current);
+  }, []);
+
+  const updatedSDPAnswer = useCallback(async (answer) => {
+    if (!pcRef.current) return;
+    await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+    console.log('New SDP answer set');
+  }, []);
+
+  const setAnswer = useCallback(async (answer) => {
+    if (!pcRef.current) return;
+    await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+    console.log('Remote answer set');
+  }, []);
+
+  // ─── Screen share ───────────────────────────────────────────────────────────
+
+  const captureScreen = useCallback(async () => {
+    try {
+      const dispStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      screenStreamRef.current = dispStream;
+
+      dispStream.getTracks().forEach((track) => {
+        pcRef.current?.addTrack(track, dispStream);
+        // Auto-cleanup when user stops sharing via browser UI
+        track.onended = () => {
+          stopStream(screenStreamRef);
+          setDisplayShare(false);
+        };
+      });
+
+      const userDispVideo = document.querySelector('#displayUser');
+      if (userDispVideo) userDispVideo.srcObject = dispStream;
+      setDisplayShare(true);
+    } catch (err) {
+      console.error('Screen capture failed:', err);
     }
-    });
-    socket.on('new-offer',(offer,code)=>{
-      console.log('new offer recieved');
+  }, []);
+
+  // ─── End call (user-initiated) ──────────────────────────────────────────────
+
+  const endCall = useCallback(() => {
+    socket.emit('endcall', codeRef.current);
+    cleanupCall();
+  }, [cleanupCall]);
+
+  // ─── Messaging ──────────────────────────────────────────────────────────────
+
+  const handleMSG = useCallback((message) => {
+    if (dcRef.current?.readyState === 'open') {
+      dcRef.current.send(message);
+    } else {
+      console.error('Data channel is not open');
+    }
+  }, []);
+
+  // ─── Join room ──────────────────────────────────────────────────────────────
+
+  const handleJoin = useCallback(async (userEmail, roomCode) => {
+    // Start local camera immediately so the user sees themselves
+    // before any peer connects. getLocalStream() is idempotent.
+    try {
+      await getLocalStream();
+    } catch (err) {
+      console.error('Could not access camera/mic:', err);
+    }
+    socket.emit('enter', userEmail, roomCode);
+  }, [getLocalStream]);
+
+  // ─── Socket event listeners ─────────────────────────────────────────────────
+
+  useEffect(() => {
+    const onEnter = (userEmail, roomCode) => {
+      console.log('New user joined:', userEmail);
+      makeCall(roomCode);
+    };
+
+    const onOffer = (offer) => answerCall(offer);
+    const onAnswer = (answer) => setAnswer(answer);
+
+    const onIceCandidate = async (candidate) => {
+      try {
+        if (pcRef.current) {
+          await pcRef.current.addIceCandidate(candidate);
+        }
+      } catch (e) {
+        console.error('Error adding ICE candidate:', e);
+      }
+    };
+
+    const onNewOffer = (offer) => {
+      console.log('Renegotiation offer received');
       handleSDPUpdate(offer);
-    });
-    socket.on('new-answer',(answer,code)=>{
-      console.log('new answer revieved');
-      UpdatedSDPAnswer(answer);
-    });
-    socket.on('endcall',(code)=>{
-      endCall();
-      console.log('user disconnected, call was ended')
-    })
-  }, [socket])
-  
-    return (
-      <SocketContext.Provider value={{
+    };
+
+    const onNewAnswer = (answer) => {
+      console.log('Renegotiation answer received');
+      updatedSDPAnswer(answer);
+    };
+
+    const onEndCall = () => {
+      console.log('Remote peer ended the call');
+      cleanupCall(); // Don't emit back — just clean up locally
+    };
+
+    socket.on('enter', onEnter);
+    socket.on('offer', onOffer);
+    socket.on('answer', onAnswer);
+    socket.on('icecandidate', onIceCandidate);
+    socket.on('new-offer', onNewOffer);
+    socket.on('new-answer', onNewAnswer);
+    socket.on('endcall', onEndCall);
+
+    return () => {
+      socket.off('enter', onEnter);
+      socket.off('offer', onOffer);
+      socket.off('answer', onAnswer);
+      socket.off('icecandidate', onIceCandidate);
+      socket.off('new-offer', onNewOffer);
+      socket.off('new-answer', onNewAnswer);
+      socket.off('endcall', onEndCall);
+    };
+  }, [makeCall, answerCall, setAnswer, handleSDPUpdate, updatedSDPAnswer, cleanupCall]);
+
+  // ─── Unmount cleanup ────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    return () => {
+      cleanupCall();
+    };
+  }, [cleanupCall]);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  return (
+    <SocketContext.Provider
+      value={{
         code,
         setCode,
         email,
         setEmail,
         displayShare,
-        streams,
         remoteDisplayShare,
+        streams,
         socket,
         isCallAlive,
         handleJoin,
@@ -251,13 +360,12 @@ export const SocketProvider = ({children}) => {
         pcRef,
         dcRef,
         flag,
-        streamRef,
         handleMSG,
         captureScreen,
         endCall,
-      }
-      }>
-        {children}
-      </SocketContext.Provider>
-    );
-  };
+      }}
+    >
+      {children}
+    </SocketContext.Provider>
+  );
+};
