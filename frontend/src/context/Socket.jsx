@@ -15,6 +15,7 @@ const RTC_CONFIG = {
 const MEDIA_CONSTRAINTS = { video: true, audio: true };
 
 export const SocketProvider = ({ children }) => {
+  const onMessageRef = useRef(null);
   const [code, setCode] = useState();
   const [email, setEmail] = useState();
   const [flag, setFlag] = useState(false);
@@ -147,7 +148,9 @@ export const SocketProvider = ({ children }) => {
       dcRef.current = dc;
       dc.onopen = () => setFlag(true);
       dc.onclose = () => setFlag(false);
-      dc.onmessage = (e) => console.log('Message received:', e.data);
+      dc.onmessage = (e) => {
+        if(onMessageRef.current) onMessageRef.current(e.data);
+      };
 
       pc.onnegotiationneeded = async () => {
         console.log('onnegotiationneeded fired');
@@ -181,7 +184,9 @@ export const SocketProvider = ({ children }) => {
         dcRef.current = e.channel;
         dcRef.current.onopen = () => setFlag(true);
         dcRef.current.onclose = () => setFlag(false);
-        dcRef.current.onmessage = (ev) => console.log('Message received:', ev.data);
+        dcRef.current.onmessage = (ev) => {
+          if(onMessageRef.current) onMessageRef.current(ev.data)
+        };
       };
 
       pc.onnegotiationneeded = async () => {
@@ -357,6 +362,7 @@ export const SocketProvider = ({ children }) => {
         isCallAlive,
         handleJoin,
         makeCall,
+        onMessageRef,
         pcRef,
         dcRef,
         flag,
