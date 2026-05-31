@@ -32,7 +32,8 @@ const App = () => {
 
                 {/* Heading */}
                 <div className="text-center mb-7">
-                    <h1 className="text-[#3b1a6e] text-2xl font-semibold">Join Meeting</h1>
+                    <h1 className="text-[#3b1a6e] text-2xl font-semibold">Samvad</h1>
+                    <h1 className="text-[#3b1a6e] text-2xl font-medium">Join Meeting</h1>
                     <p className="text-[#9b6bbf] text-sm mt-1">Connect instantly with your team</p>
                 </div>
 
