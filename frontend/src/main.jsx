@@ -11,7 +11,7 @@ const router = createBrowserRouter(
   createRoutesFromElements(
   <Route path='/'>
     <Route index element={<App/>}/>
-      <Route path='/room/:id' element={<Room/>}/>
+      <Route path='/:email/room/:id' element={<Room/>}/>
       <Route path='*' element={<NotFound/>}/>
   </Route>
   )

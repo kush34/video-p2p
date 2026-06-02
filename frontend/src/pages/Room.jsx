@@ -1,337 +1,445 @@
-import React, { useContext, useEffect, useRef, useState } from "react";
+import React, { useContext, useEffect, useRef, useState, useCallback } from "react";
 import { SocketContext } from "../context/Socket";
-import { FaMessage } from "react-icons/fa6";
-import { BsCameraReels } from "react-icons/bs";
-import { FaMicrophone } from "react-icons/fa";
+import { BsCameraVideo, BsCameraVideoOff } from "react-icons/bs";
+import { FaMicrophone, FaMicrophoneSlash } from "react-icons/fa";
 import { ImPhoneHangUp } from "react-icons/im";
-import { useNavigate } from "react-router-dom";
-import { MdScreenShare } from "react-icons/md";
+import { MdScreenShare, MdStopScreenShare, MdMoreVert, MdPeople, MdChat } from "react-icons/md";
+import { HiVolumeUp } from "react-icons/hi";
 
-const Room = () => {
-  const navigate = useNavigate();
-  const {
-    email, code, makeCall, handleJoin, dcRef, flag, streams,
-    handleMSG, streamRef, remoteRef, handleEndCall, videoCapture, stream, endCall,
-    isCallAlive, captureScreen, displayShare, remoteDisplayShare, onMessageRef
-  } = useContext(SocketContext);
+// ── Notification sound ────────────────────────────────────────────────────────
+function playSound(type) {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.connect(g); g.connect(ctx.destination);
+    const freq = { join:[520,660], leave:[440,330], 'mic-off':[400,360], 'mic-on':[460,540],
+                   'cam-off':[400,360], 'cam-on':[460,540], 'screen-on':[500,620], 'screen-off':[420,360] };
+    const [f1,f2] = freq[type]||[480,480];
+    osc.frequency.setValueAtTime(f1, ctx.currentTime);
+    osc.frequency.setValueAtTime(f2, ctx.currentTime+0.1);
+    g.gain.setValueAtTime(0.12, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.3);
+    osc.start(); osc.stop(ctx.currentTime+0.3);
+    osc.onended = ()=>ctx.close();
+  } catch(_){}
+}
 
-  const msgEndRef = useRef(null);
-  const [msg, setMsg] = useState("");
-  const [msgBool, setMsgBool] = useState(false);
-  const [micActive, setMicActive] = useState(true);
-  const [camActive, setCamActive] = useState(true);
-  const [messages, setMessages] = useState([]);
+// ── Toast ─────────────────────────────────────────────────────────────────────
+const TOAST_COLORS = {
+  join:'bg-[#1e2a1e] border-[#3a5c3a] text-[#86efac]',
+  leave:'bg-[#2a1e1e] border-[#5c3a3a] text-[#fca5a5]',
+  'mic-off':'bg-[#2a2a1e] border-[#5c5a3a] text-[#fde68a]',
+  'mic-on':'bg-[#1e222a] border-[#3a4a5c] text-[#93c5fd]',
+  'cam-off':'bg-[#2a2a1e] border-[#5c5a3a] text-[#fde68a]',
+  'cam-on':'bg-[#1e222a] border-[#3a4a5c] text-[#93c5fd]',
+  'screen-on':'bg-[#1e242a] border-[#3a5060] text-[#67e8f9]',
+  'screen-off':'bg-[#2a221e] border-[#5c4a3a] text-[#fdba74]',
+  info:'bg-[#1e1e2a] border-[#3a3a5c] text-[#c4b5fd]',
+};
+const TOAST_ICONS = { join:'↗', leave:'↙', 'mic-on':'🎙', 'mic-off':'🔇',
+                      'cam-on':'📹', 'cam-off':'⬛', 'screen-on':'🖥', 'screen-off':'⏹', info:'ℹ' };
 
-  useEffect(() => {
-    msgEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  useEffect(() => {
-    handleJoin(email, code);
-  }, []);
-
-  const sendMsg = () => {
-    if (!msg.trim()) return;
-    handleMSG(msg);
-    setMessages((prev) => [...prev, { text: msg, self: true }]);
-    setMsg("");
-  };
-
-  const remoteVideoStreams = streams.filter((s) => s.kind === "video");
-  useEffect(() => {
-    onMessageRef.current = (text) => {
-      setMessages((prev) => [...prev, { text, self: false }]);
-    };
-    return () => { onMessageRef.current = null; };
-  }, []);
+const Toast = ({ n, onDismiss }) => {
+  useEffect(()=>{ playSound(n.type); },[]);
   return (
-    <div
-      className="w-full h-screen text-white flex flex-col overflow-hidden font-mono relative"
-      style={{
-        background: `
-          radial-gradient(ellipse 80% 60% at 60% 20%, rgba(175,109,255,0.18), transparent 65%),
-          radial-gradient(ellipse 70% 60% at 20% 80%, rgba(255,100,180,0.12), transparent 65%),
-          radial-gradient(ellipse 60% 50% at 60% 65%, rgba(255,235,170,0.08), transparent 62%),
-          radial-gradient(ellipse 65% 40% at 50% 60%, rgba(120,190,255,0.10), transparent 68%),
-          #0a0a0f
-        `,
-      }}
-    >
-      {/* Grid background */}
-      {/* <div
-        className="absolute inset-0 opacity-[0.03] pointer-events-none"
-        style={{
-          backgroundImage:
-            "linear-gradient(#ffffff 1px, transparent 1px), linear-gradient(90deg, #ffffff 1px, transparent 1px)",
-          backgroundSize: "40px 40px",
-        }}
-      /> */}
+    <div onClick={()=>onDismiss(n.id)}
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs cursor-pointer select-none
+        shadow-lg backdrop-blur-sm ${TOAST_COLORS[n.type]||TOAST_COLORS.info}`}
+      style={{animation:'toast-in 0.2s ease forwards'}}>
+      <span className="text-sm shrink-0">{TOAST_ICONS[n.type]||'ℹ'}</span>
+      <span className="font-medium">{n.message}</span>
+    </div>
+  );
+};
 
-      {/* Ambient glow */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] rounded-full bg-purple-500/5 blur-3xl pointer-events-none" />
+// ── VAD hook ──────────────────────────────────────────────────────────────────
+function useVAD(stream, enabled) {
+  const [active, setActive] = useState(false);
+  const raf = useRef(null);
+  const ctxRef = useRef(null);
+  useEffect(()=>{
+    if(!stream||!enabled){ setActive(false); return; }
+    const ctx = new AudioContext();
+    const an = ctx.createAnalyser(); an.fftSize=512;
+    ctx.createMediaStreamSource(stream).connect(an);
+    ctxRef.current=ctx;
+    const buf = new Uint8Array(an.frequencyBinCount);
+    const tick=()=>{ an.getByteFrequencyData(buf); setActive(buf.reduce((a,b)=>a+b,0)/buf.length>12); raf.current=requestAnimationFrame(tick); };
+    raf.current=requestAnimationFrame(tick);
+    return ()=>{ cancelAnimationFrame(raf.current); ctx.close(); setActive(false); };
+  },[stream,enabled]);
+  return active;
+}
 
-      {/* Header */}
-      <header
-        className="relative z-10 flex items-center justify-between px-6 py-3 border-b backdrop-blur-sm"
-        style={{ borderColor: "rgba(175,109,255,0.1)" }}
-      >
-        <div className="flex items-center gap-6 text-xs">
-          <div className="flex items-center gap-2">
-            <span style={{ color: "rgba(255,255,255,0.2)" }}>user</span>
-            <span style={{ color: "rgba(255,255,255,0.6)" }} className="font-semibold tracking-wide">
-              {email}
-            </span>
-          </div>
-          <div className="w-px h-3" style={{ background: "rgba(175,109,255,0.2)" }} />
-          <div className="flex items-center gap-2">
-            <span style={{ color: "rgba(255,255,255,0.2)" }}>room</span>
-            <span className="font-semibold tracking-widest" style={{ color: "#c084fc" }}>
-              {code}
-            </span>
-          </div>
-        </div>
-        <div className="text-xs tracking-widest uppercase" style={{ color: "rgba(255,255,255,0.2)" }}>
-          {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-        </div>
-      </header>
+// ── Initials avatar ───────────────────────────────────────────────────────────
+function getInitials(name='') {
+  const parts = name.split(/[\s@]+/).filter(Boolean);
+  if(parts.length>=2) return (parts[0][0]+parts[1][0]).toUpperCase();
+  return (parts[0]||'?').slice(0,2).toUpperCase();
+}
+const AVATAR_COLORS=['bg-[#1a73e8]','bg-[#0f9d58]','bg-[#e37400]','bg-[#a142f4]','bg-[#ea4335]','bg-[#00897b]'];
+function avatarColor(name=''){
+  let h=0; for(let i=0;i<name.length;i++) h=(h*31+name.charCodeAt(i))&0xffff;
+  return AVATAR_COLORS[h%AVATAR_COLORS.length];
+}
 
-      {/* Main video area */}
-      <div className="relative z-10 flex-1 flex gap-3 p-4 overflow-hidden min-h-0">
+const Avatar = ({ name, size='md' }) => {
+  const sz = size==='sm' ? 'w-8 h-8 text-xs' : size==='lg' ? 'w-12 h-12 text-base' : 'w-9 h-9 text-sm';
+  return (
+    <div className={`${sz} ${avatarColor(name)} rounded-full flex items-center justify-center text-white font-semibold shrink-0 select-none`}>
+      {getInitials(name)}
+    </div>
+  );
+};
 
-        {/* Local video */}
-        <div
-          className={`relative rounded-2xl overflow-hidden flex-shrink-0 transition-all duration-500 border
-            ${remoteVideoStreams.length === 0 ? "w-full" : "w-1/2"}`}
-          style={{ background: "#0f0f18", borderColor: "rgba(175,109,255,0.12)" }}
-        >
-          <video id="video" className="w-full h-full object-cover" autoPlay muted />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent pointer-events-none" />
-          <div className="absolute bottom-3 left-3 flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            <span className="text-xs font-semibold tracking-wider" style={{ color: "rgba(255,255,255,0.6)" }}>
-              YOU
-            </span>
-          </div>
-        </div>
-
-        {/* Remote streams */}
-        {remoteVideoStreams.length > 0 && (
-          <div className={`flex-1 grid gap-3 min-h-0 ${remoteVideoStreams.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
-            {remoteVideoStreams.map((s, index) => (
-              <div
-                key={index}
-                className="relative rounded-2xl overflow-hidden border"
-                style={{ background: "#0f0f18", borderColor: "rgba(175,109,255,0.12)" }}
-              >
-                <video
-                  className="w-full h-full object-cover"
-                  autoPlay
-                  ref={(el) => { if (el && !el.srcObject) el.srcObject = s.mediaStream; }}
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent pointer-events-none" />
-                <div className="absolute bottom-3 left-3 flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#c084fc" }} />
-                  <span className="text-xs font-semibold tracking-wider" style={{ color: "rgba(255,255,255,0.5)" }}>
-                    PEER {index + 1}
-                  </span>
-                </div>
-                <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 rounded-tl-2xl" style={{ borderColor: "rgba(192,132,252,0.3)" }} />
-                <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 rounded-tr-2xl" style={{ borderColor: "rgba(192,132,252,0.3)" }} />
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Chat panel */}
-        {msgBool && (
-          <div
-            className="w-72 flex-shrink-0 flex flex-col rounded-2xl overflow-hidden border"
-            style={{
-              background: "rgba(15,15,24,0.90)",
-              borderColor: "rgba(175,109,255,0.15)",
-              backdropFilter: "blur(16px)",
-            }}
-          >
-            {/* Chat header */}
-            <div
-              className="px-4 py-3 flex items-center justify-between flex-shrink-0 border-b"
-              style={{ borderColor: "rgba(175,109,255,0.1)" }}
-            >
-              <span className="text-xs uppercase tracking-[0.15em] font-semibold" style={{ color: "rgba(192,132,252,0.6)" }}>
-                Messages
-              </span>
-              <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#c084fc" }} />
-            </div>
-
-            {/* Messages */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 scrollbar-none">
-              {messages.length === 0 ? (
-                <div className="text-center text-xs mt-8 tracking-wide" style={{ color: "rgba(255,255,255,0.12)" }}>
-                  no messages yet
-                </div>
-              ) : (
-                messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.self ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className="max-w-[80%] px-3 py-2 rounded-xl text-xs leading-relaxed"
-                      style={
-                        m.self
-                          ? {
-                            background: "rgba(192,132,252,0.15)",
-                            color: "#e9d5ff",
-                            border: "0.5px solid rgba(192,132,252,0.25)",
-                            borderBottomRightRadius: "4px",
-                          }
-                          : {
-                            background: "rgba(255,255,255,0.05)",
-                            color: "rgba(255,255,255,0.65)",
-                            border: "0.5px solid rgba(255,255,255,0.07)",
-                            borderBottomLeftRadius: "4px",
-                          }
-                      }
-                    >
-                      {m.text}
-                    </div>
-                  </div>
-                ))
-              )}
-              <div ref={msgEndRef} />
-            </div>
-
-            {/* Input */}
-            {flag && (
-              <div
-                className="p-3 flex gap-2 flex-shrink-0 border-t"
-                style={{ borderColor: "rgba(175,109,255,0.1)" }}
-              >
-                <input
-                  value={msg}
-                  onChange={(e) => setMsg(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && sendMsg()}
-                  type="text"
-                  className="flex-1 rounded-xl px-3 py-2 text-xs outline-none transition-colors"
-                  style={{
-                    background: "rgba(255,255,255,0.04)",
-                    color: "rgba(255,255,255,0.8)",
-                    border: "0.5px solid rgba(175,109,255,0.2)",
-                    fontFamily: "inherit",
-                  }}
-                  placeholder="type a message…"
-                />
-                <button
-                  onClick={sendMsg}
-                  className="px-3 py-2 rounded-xl text-xs font-semibold transition-colors"
-                  style={{
-                    background: "rgba(192,132,252,0.12)",
-                    color: "#c084fc",
-                    border: "0.5px solid rgba(192,132,252,0.25)",
-                  }}
-                >
-                  ↑
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+// ── Speaker tile (large) ──────────────────────────────────────────────────────
+const SpeakerTile = ({ name, videoRef, stream, camOn, micOn, speaking, muted=false }) => (
+  <div className={`relative w-full h-full rounded-xl overflow-hidden bg-[#1c1c1c] transition-all duration-200
+    ${speaking&&micOn ? 'ring-2 ring-[#1a73e8]' : ''}`}>
+    {camOn ? (
+      <video className="w-full h-full object-cover" autoPlay muted={muted} ref={videoRef}
+        onLoadedMetadata={e=>{ if(stream&&!e.target.srcObject) e.target.srcObject=stream; }} />
+    ) : (
+      <div className="w-full h-full flex items-center justify-center">
+        <Avatar name={name} size="lg" />
       </div>
+    )}
+    <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
+    <div className="absolute bottom-3 left-3 flex items-center gap-2">
+      {!micOn && <div className="w-6 h-6 rounded-full bg-[#ea4335] flex items-center justify-center"><FaMicrophoneSlash className="text-white text-[10px]"/></div>}
+      <span className="text-white text-sm font-medium drop-shadow">{name}</span>
+    </div>
+  </div>
+);
 
-      {/* Control bar */}
-      <div
-        className="relative z-10 flex items-center justify-center gap-3 py-4 px-6 border-t"
-        style={{ borderColor: "rgba(175,109,255,0.1)" }}
-      >
-        {/* Chat */}
-        <CtrlBtn
-          active={msgBool}
-          onClick={() => setMsgBool((v) => !v)}
-          label="chat"
-          activeStyle={{ background: "rgba(192,132,252,0.18)", color: "#c084fc", border: "0.5px solid rgba(192,132,252,0.3)" }}
-        >
-          <FaMessage className="text-base" />
-        </CtrlBtn>
+// ── Filmstrip tile ────────────────────────────────────────────────────────────
+const FilmTile = ({ name, videoRef, stream, camOn, micOn, speaking, muted=false, onClick, active=false }) => (
+  <div onClick={onClick}
+    className={`relative shrink-0 w-[180px] h-[120px] rounded-lg overflow-hidden bg-[#2a2a2a] cursor-pointer
+      transition-all duration-150 hover:brightness-110
+      ${active ? 'ring-2 ring-[#1a73e8]' : speaking&&micOn ? 'ring-2 ring-[#1a73e8]/60' : 'ring-1 ring-white/10'}`}>
+    {camOn ? (
+      <video className="w-full h-full object-cover" autoPlay muted={muted} ref={videoRef}
+        onLoadedMetadata={e=>{ if(stream&&!e.target.srcObject) e.target.srcObject=stream; }} />
+    ) : (
+      <div className="w-full h-full flex items-center justify-center bg-[#2a2a2a]">
+        <Avatar name={name} size="md" />
+      </div>
+    )}
+    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
+    <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
+      <span className="text-white text-[11px] font-medium truncate drop-shadow">{name}</span>
+      <div className="flex items-center gap-1">
+        {speaking&&micOn && <HiVolumeUp className="text-[#1a73e8] text-sm"/>}
+        {!micOn && <FaMicrophoneSlash className="text-[#ea4335] text-xs"/>}
+      </div>
+    </div>
+  </div>
+);
 
-        {/* Camera */}
-        <CtrlBtn
-          active={camActive}
-          onClick={() => setCamActive((v) => !v)}
-          label="camera"
-          strikethrough={!camActive}
-        >
-          <BsCameraReels className="text-base" />
-        </CtrlBtn>
+// ── Control icon button ───────────────────────────────────────────────────────
+const CtrlBtn = ({ onClick, icon, label, red=false, active=true }) => (
+  <button onClick={onClick} title={label}
+    className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-150 text-lg
+      ${red ? 'bg-[#ea4335] text-white hover:bg-[#c5382b]'
+             : active ? 'bg-[#3c3c3c] text-white hover:bg-[#4a4a4a]'
+                      : 'bg-[#ea4335]/20 text-[#ea4335] hover:bg-[#ea4335]/30'}`}>
+    {icon}
+  </button>
+);
 
-        {/* Mic */}
-        <CtrlBtn
-          active={micActive}
-          onClick={() => setMicActive((v) => !v)}
-          label="mic"
-          strikethrough={!micActive}
-        >
-          <FaMicrophone className="text-base" />
-        </CtrlBtn>
-
-        {/* Screen share */}
-        <CtrlBtn active={true} onClick={captureScreen} label="share">
-          <MdScreenShare className="text-base" />
-        </CtrlBtn>
-
-        <div className="w-px h-8 mx-1" style={{ background: "rgba(175,109,255,0.15)" }} />
-
-        {/* End call */}
-        <button
-          onClick={handleEndCall}
-          className="group relative w-14 h-12 rounded-2xl flex items-center justify-center text-lg transition-all duration-200"
-          style={{
-            background: "rgba(239,68,68,0.12)",
-            color: "#f87171",
-            border: "0.5px solid rgba(239,68,68,0.25)",
-          }}
-        >
-          <ImPhoneHangUp className="text-base" />
-          <span
-            className="absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] tracking-widest opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap uppercase"
-            style={{ color: "rgba(248,113,113,0.5)" }}
-          >
-            end
-          </span>
-        </button>
+// ── Participants panel ────────────────────────────────────────────────────────
+const ParticipantsPanel = ({ self, peers, peerStates }) => {
+  const all = [
+    { email: self, isSelf: true, mic: true, cam: true },
+    ...Object.entries(peerStates).map(([email,s])=>({ email, ...s })),
+    ...peers.filter(p=>!peerStates[p]).map(p=>({ email:p, mic:true, cam:true }))
+  ];
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-4 py-3 border-b border-[#3a3a3a]">
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#aaa] text-sm">🔍</span>
+          <input className="w-full bg-[#2a2a2a] text-[#e0e0e0] text-sm rounded-full pl-9 pr-4 py-2 outline-none border border-transparent focus:border-[#1a73e8] placeholder-[#888]"
+            placeholder="Search for people" />
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <div className="px-4 py-2 text-xs text-[#aaa] font-medium tracking-wide uppercase">On the call</div>
+        {all.map(({ email, isSelf, mic, cam })=>(
+          <div key={email} className="flex items-center gap-3 px-4 py-2 hover:bg-[#2a2a2a] transition-colors">
+            <Avatar name={email} size="sm" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm text-[#e0e0e0] font-medium truncate">
+                {email}{isSelf ? ' (You)' : ''}
+              </div>
+            </div>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center
+              ${mic ? 'bg-[#1a73e8]' : 'bg-[#3a3a3a]'}`}>
+              {mic ? <HiVolumeUp className="text-white text-sm"/> : <FaMicrophoneSlash className="text-[#aaa] text-xs"/>}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
 };
 
-// Small helper to reduce repetition in control buttons
-const CtrlBtn = ({ active, onClick, label, children, strikethrough = false, activeStyle }) => {
-  const defaultActive = {
-    background: "rgba(255,255,255,0.05)",
-    color: "rgba(255,255,255,0.5)",
-    border: "0.5px solid rgba(255,255,255,0.07)",
-  };
-  const inactiveStyle = {
-    background: "rgba(239,68,68,0.12)",
-    color: "#f87171",
-    border: "0.5px solid rgba(239,68,68,0.2)",
-  };
+// ── Chat panel ────────────────────────────────────────────────────────────────
+const ChatPanel = ({ messages, msg, setMsg, sendMsg, flag, msgEndRef }) => (
+  <div className="flex flex-col h-full">
+    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+      {messages.length===0 ? (
+        <p className="text-center text-sm text-[#888] mt-8">No messages yet</p>
+      ) : messages.map((m,i)=>(
+        <div key={i} className={`flex ${m.self?'justify-end':'justify-start'}`}>
+          <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm
+            ${m.self ? 'bg-[#1a73e8] text-white rounded-br-sm' : 'bg-[#2a2a2a] text-[#e0e0e0] rounded-bl-sm'}`}>
+            {m.text}
+          </div>
+        </div>
+      ))}
+      <div ref={msgEndRef}/>
+    </div>
+    {flag && (
+      <div className="p-3 border-t border-[#3a3a3a] flex gap-2">
+        <input value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendMsg()}
+          className="flex-1 bg-[#2a2a2a] text-[#e0e0e0] text-sm rounded-full px-4 py-2 outline-none border border-transparent focus:border-[#1a73e8] placeholder-[#666]"
+          placeholder="Send a message…" />
+        <button onClick={sendMsg}
+          className="w-9 h-9 rounded-full bg-[#1a73e8] text-white flex items-center justify-center hover:bg-[#1557b0] transition-colors text-sm">
+          ↑
+        </button>
+      </div>
+    )}
+  </div>
+);
+
+// ── Room ──────────────────────────────────────────────────────────────────────
+const Room = () => {
+  const {
+    email, code, handleJoin, dcRef, flag, streams,
+    handleMSG, handleEndCall, captureScreen,
+    localStreamRef, screenStreamRef, onMessageRef, emitMediaState,
+    peerStates, notifications, dismissNotification, displayShare,
+  } = useContext(SocketContext);
+
+  const msgEndRef = useRef(null);
+  const localVideoRef = useRef(null);
+
+  const [msg, setMsg] = useState('');
+  const [panel, setPanel] = useState('participants'); // 'chat' | 'participants' | null
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
+  const [messages, setMessages] = useState([]);
+  const [activeSpeaker, setActiveSpeaker] = useState('self'); // 'self' | peer index
+
+  useEffect(()=>{ msgEndRef.current?.scrollIntoView({behavior:'smooth'}); },[messages]);
+  useEffect(()=>{ handleJoin(email,code); },[]);
+  useEffect(()=>{
+    onMessageRef.current=(text)=>setMessages(p=>[...p,{text,self:false}]);
+    return()=>{ onMessageRef.current=null; };
+  },[]);
+
+  // Attach local video
+  useEffect(()=>{
+    const attach=()=>{ const s=localStreamRef?.current; if(s&&localVideoRef.current) localVideoRef.current.srcObject=s; };
+    attach();
+    const iv=setInterval(()=>{ if(localStreamRef?.current&&localVideoRef.current&&!localVideoRef.current.srcObject){attach();clearInterval(iv);} },300);
+    return()=>clearInterval(iv);
+  },[]);
+
+  const toggleMic=useCallback(()=>{
+    const s=localStreamRef?.current; if(!s)return;
+    const next=!micOn; s.getAudioTracks().forEach(t=>{t.enabled=next;});
+    setMicOn(next); emitMediaState({mic:next});
+  },[micOn,localStreamRef,emitMediaState]);
+
+  const toggleCam=useCallback(()=>{
+    const s=localStreamRef?.current; if(!s)return;
+    const next=!camOn; s.getVideoTracks().forEach(t=>{t.enabled=next;});
+    setCamOn(next); emitMediaState({cam:next});
+  },[camOn,localStreamRef,emitMediaState]);
+
+  const sendMsg=()=>{ if(!msg.trim())return; handleMSG(msg); setMessages(p=>[...p,{text:msg,self:true}]); setMsg(''); };
+
+  const localStream=localStreamRef?.current;
+  const isSpeaking=useVAD(localStream,micOn);
+  const remoteVideoStreams=streams.filter(s=>s.kind==='video');
+  const peerEmails=Object.keys(peerStates);
+
+  // Auto-pin screen share tile when sharing starts/stops
+  useEffect(()=>{
+    if(displayShare) setActiveSpeaker('screen');
+    else if(activeSpeaker==='screen') setActiveSpeaker('self');
+  },[displayShare]);
+
+  // Build filmstrip entries — screen share tile inserted after self when active
+  const filmstrip = [
+    { id:'self', name:email, isLocal:true },
+    ...(displayShare ? [{ id:'screen', name:`${email}'s screen`, isScreen:true }] : []),
+    ...remoteVideoStreams.map((s,i)=>({ id:i, name:peerEmails[i]||`Peer ${i+1}`, stream:s.mediaStream, ps:peerStates[peerEmails[i]]||{} }))
+  ];
+
+  // Active speaker data
+  const activeTile = activeSpeaker==='self'
+    ? { name:email, isLocal:true, camOn, micOn, speaking:isSpeaking }
+    : activeSpeaker==='screen'
+    ? { name:`${email}'s screen`, isScreen:true }
+    : (() => {
+        const i = activeSpeaker;
+        const s = remoteVideoStreams[i];
+        const peerEmail = peerEmails[i];
+        const ps = peerStates[peerEmail]||{};
+        return { name:peerEmail||`Peer ${i+1}`, stream:s?.mediaStream, camOn:ps.cam!==false, micOn:ps.mic!==false, speaking:false };
+      })();
+
+  const msgCount = messages.filter(m=>!m.self).length;
 
   return (
-    <button
-      onClick={onClick}
-      className="group relative w-12 h-12 rounded-2xl flex items-center justify-center text-lg transition-all duration-200"
-      style={active ? (activeStyle || defaultActive) : inactiveStyle}
-    >
-      {children}
-      {strikethrough && (
-        <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="block w-7 h-px bg-red-400 rotate-45 rounded-full absolute" />
-        </span>
-      )}
-      <span
-        className="absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] tracking-widest opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap uppercase"
-        style={{ color: "rgba(255,255,255,0.25)" }}
-      >
-        {label}
-      </span>
-    </button>
+    <div className="w-full h-screen flex flex-col bg-[#1c1c1c] text-white overflow-hidden" style={{fontFamily:'Google Sans, Roboto, sans-serif'}}>
+
+      {/* Toasts */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+        {notifications.map(n=>(
+          <div key={n.id} className="pointer-events-auto"><Toast n={n} onDismiss={dismissNotification}/></div>
+        ))}
+      </div>
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-[#202020] border-b border-[#3a3a3a] shrink-0 h-14">
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="text-xs text-[#aaa] leading-none">Room</div>
+            <div className="text-sm font-medium text-white leading-tight truncate max-w-[200px]">{code}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 text-sm">
+          <button onClick={()=>setPanel(p=>p==='chat'?null:'chat')}
+            className={`px-4 py-1.5 rounded-full transition-colors ${panel==='chat'?'bg-[#3c3c3c] text-white':'text-[#aaa] hover:bg-[#2a2a2a]'}`}>
+            Chat
+          </button>
+          <button onClick={()=>setPanel(p=>p==='participants'?null:'participants')}
+            className={`px-4 py-1.5 rounded-full transition-colors ${panel==='participants'?'bg-[#3c3c3c] text-white':'text-[#aaa] hover:bg-[#2a2a2a]'}`}>
+            Participants {peerEmails.length+1>0&&<span className="ml-1 text-xs text-[#aaa]">{peerEmails.length+1}</span>}
+          </button>
+        </div>
+        <div className="text-xs text-[#aaa] tabular-nums">
+          {new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+
+        {/* Left: video + filmstrip */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+
+          {/* Main speaker */}
+          <div className="flex-1 min-h-0 p-3 pb-1">
+            {activeTile.isScreen ? (
+              <div className="relative w-full h-full rounded-xl overflow-hidden bg-[#111]">
+                <video className="w-full h-full object-contain" autoPlay muted
+                  ref={el=>{ if(el&&screenStreamRef?.current&&!el.srcObject) el.srcObject=screenStreamRef.current; }}
+                  onLoadedMetadata={e=>{ if(screenStreamRef?.current&&!e.target.srcObject) e.target.srcObject=screenStreamRef.current; }}
+                />
+                <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/50 px-2 py-1 rounded-md">
+                  <MdScreenShare className="text-[#1a73e8] text-sm"/>
+                  <span className="text-white text-xs font-medium">You are presenting</span>
+                </div>
+              </div>
+            ) : activeTile.isLocal ? (
+              <SpeakerTile name={activeTile.name} videoRef={localVideoRef}
+                camOn={activeTile.camOn} micOn={activeTile.micOn} speaking={activeTile.speaking} muted />
+            ) : (
+              <SpeakerTile name={activeTile.name} stream={activeTile.stream}
+                camOn={activeTile.camOn} micOn={activeTile.micOn} speaking={activeTile.speaking}
+                videoRef={el=>{ if(el&&activeTile.stream&&!el.srcObject) el.srcObject=activeTile.stream; }} />
+            )}
+          </div>
+
+          {/* Filmstrip */}
+          <div className="shrink-0 px-3 pb-2">
+            <div className="flex gap-2 overflow-x-auto scrollbar-none py-3 px-1">
+              {filmstrip.map((f,idx)=>{
+                const isActive = f.id==='self' ? activeSpeaker==='self' : f.id==='screen' ? activeSpeaker==='screen' : activeSpeaker===f.id;
+                if(f.isLocal) return (
+                  <FilmTile key="self" name={email} videoRef={el=>{
+                      if(el&&localStreamRef?.current&&!el.srcObject) el.srcObject=localStreamRef.current;
+                    }}
+                    camOn={camOn} micOn={micOn} speaking={isSpeaking} muted
+                    active={isActive} onClick={()=>setActiveSpeaker('self')} />
+                );
+                if(f.isScreen) return (
+                  <div key="screen" onClick={()=>setActiveSpeaker('screen')}
+                    className={`relative shrink-0 w-[180px] h-[120px] rounded-lg overflow-hidden bg-[#111] cursor-pointer
+                      transition-all hover:brightness-110 border
+                      ${isActive?'border-[#1a73e8]':'border-white/10'}`}>
+                    <video className="w-full h-full object-contain" autoPlay muted
+                      ref={el=>{ if(el&&screenStreamRef?.current&&!el.srcObject) el.srcObject=screenStreamRef.current; }}
+                    />
+                    <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1">
+                      <MdScreenShare className="text-[#1a73e8] text-xs shrink-0"/>
+                      <span className="text-white text-[11px] font-medium truncate">Your screen</span>
+                    </div>
+                  </div>
+                );
+                const ps=f.ps||{};
+                return (
+                  <FilmTile key={f.id} name={f.name}
+                    stream={f.stream}
+                    videoRef={el=>{ if(el&&f.stream&&!el.srcObject) el.srcObject=f.stream; }}
+                    camOn={ps.cam!==false} micOn={ps.mic!==false} speaking={false}
+                    active={isActive} onClick={()=>setActiveSpeaker(f.id)} />
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Controls */}
+          <div className="shrink-0 flex items-center justify-center gap-3 py-3 border-t border-[#2a2a2a] bg-[#202020]">
+            <CtrlBtn onClick={toggleCam} icon={camOn?<BsCameraVideo/>:<BsCameraVideoOff/>}
+              label={camOn?'Turn off camera':'Turn on camera'} active={camOn} />
+            <CtrlBtn onClick={toggleMic} icon={micOn?<FaMicrophone/>:<FaMicrophoneSlash/>}
+              label={micOn?'Mute':'Unmute'} active={micOn} />
+            <CtrlBtn onClick={captureScreen} icon={displayShare?<MdStopScreenShare/>:<MdScreenShare/>}
+              label={displayShare?'Stop sharing':'Share screen'} active={!displayShare} />
+            <CtrlBtn onClick={()=>setPanel(p=>p?null:'participants')} icon={<MdMoreVert/>} label="More options" active />
+            <CtrlBtn onClick={handleEndCall} icon={<ImPhoneHangUp/>} label="Leave call" red />
+          </div>
+        </div>
+
+        {/* Right panel */}
+        {panel && (
+          <div className="w-[300px] shrink-0 flex flex-col bg-[#242424] border-l border-[#3a3a3a] overflow-hidden">
+            {/* Panel tabs */}
+            <div className="flex border-b border-[#3a3a3a] shrink-0">
+              {['chat','participants'].map(tab=>(
+                <button key={tab} onClick={()=>setPanel(tab)}
+                  className={`flex-1 py-3 text-sm font-medium capitalize transition-colors relative
+                    ${panel===tab?'text-[#1a73e8]':'text-[#aaa] hover:text-[#e0e0e0]'}`}>
+                  {tab==='chat'?'Chat':'Participants'}
+                  {panel===tab && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1a73e8]"/>}
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {panel==='participants'
+                ? <ParticipantsPanel self={email} peers={peerEmails} peerStates={peerStates}/>
+                : <ChatPanel messages={messages} msg={msg} setMsg={setMsg} sendMsg={sendMsg} flag={flag} msgEndRef={msgEndRef}/>
+              }
+            </div>
+          </div>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes toast-in { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+        .scrollbar-none::-webkit-scrollbar { display:none; }
+        .scrollbar-none { -ms-overflow-style:none; scrollbar-width:none; }
+      `}</style>
+    </div>
   );
 };
 
