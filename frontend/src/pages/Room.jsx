@@ -1,10 +1,12 @@
 import React, { useContext, useEffect, useRef, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { SocketContext } from "../context/Socket";
 import { BsCameraVideo, BsCameraVideoOff } from "react-icons/bs";
 import { FaMicrophone, FaMicrophoneSlash } from "react-icons/fa";
 import { ImPhoneHangUp } from "react-icons/im";
 import { MdScreenShare, MdStopScreenShare, MdMoreVert, MdPeople, MdChat } from "react-icons/md";
 import { HiVolumeUp } from "react-icons/hi";
+import { TbPinned, TbPinnedOff } from "react-icons/tb";
 
 // ── Notification sound ────────────────────────────────────────────────────────
 function playSound(type) {
@@ -85,7 +87,7 @@ function avatarColor(name=''){
 }
 
 const Avatar = ({ name, size='md' }) => {
-  const sz = size==='sm' ? 'w-8 h-8 text-xs' : size==='lg' ? 'w-12 h-12 text-base' : 'w-9 h-9 text-sm';
+  const sz = size==='sm' ? 'w-8 h-8 text-xs' : size==='lg' ? 'w-16 h-16 text-xl' : 'w-9 h-9 text-sm';
   return (
     <div className={`${sz} ${avatarColor(name)} rounded-full flex items-center justify-center text-white font-semibold shrink-0 select-none`}>
       {getInitials(name)}
@@ -93,58 +95,144 @@ const Avatar = ({ name, size='md' }) => {
   );
 };
 
+// ── Safe video element — suppresses native controls on mobile browsers ────────
+const SafeVideo = ({ className, autoPlay, muted, playsInline=true, srcObject, onRef, style }) => {
+  const ref = useRef(null);
+  useEffect(()=>{
+    const el = ref.current;
+    if(!el) return;
+    // Suppress any browser-injected controls
+    el.controls = false;
+    el.disablePictureInPicture = true;
+    el.setAttribute('controlsList','nodownload nofullscreen noremoteplayback');
+    el.setAttribute('disablepictureinpicture','');
+    el.setAttribute('webkit-playsinline','');
+    el.setAttribute('playsinline','');
+    if(srcObject && el.srcObject !== srcObject) {
+      el.srcObject = srcObject;
+      el.play().catch(()=>{});
+    }
+    if(onRef) onRef(el);
+  },[srcObject]);
+
+  return (
+    <video
+      ref={ref}
+      className={className}
+      style={{ ...style, WebkitUserSelect:'none', userSelect:'none' }}
+      autoPlay={autoPlay}
+      muted={muted}
+      playsInline
+      controls={false}
+      disablePictureInPicture
+    />
+  );
+};
+
 // ── Speaker tile (large) ──────────────────────────────────────────────────────
-const SpeakerTile = ({ name, videoRef, stream, camOn, micOn, speaking, muted=false }) => (
-  <div className={`relative w-full h-full rounded-xl overflow-hidden bg-[#1c1c1c] transition-all duration-200
-    ${speaking&&micOn ? 'ring-2 ring-[#1a73e8]' : ''}`}>
-    {camOn ? (
-      <video className="w-full h-full object-cover" autoPlay muted={muted} ref={videoRef}
-        onLoadedMetadata={e=>{ if(stream&&!e.target.srcObject) e.target.srcObject=stream; }} />
-    ) : (
-      <div className="w-full h-full flex items-center justify-center">
-        <Avatar name={name} size="lg" />
+const SpeakerTile = ({ name, stream, camOn, micOn, speaking, muted=false, pinned=false, onPin }) => {
+  const videoRef = useRef(null);
+  useEffect(()=>{
+    const el = videoRef.current;
+    if(!el) return;
+    if(stream && el.srcObject !== stream){ el.srcObject = stream; el.play().catch(()=>{}); }
+    else if(!stream && muted && el.srcObject){
+      // local — handled by parent attaching localStreamRef
+    }
+  },[stream]);
+
+  return (
+    <div className={`relative w-full h-full rounded-xl overflow-hidden bg-[#1c1c1c] transition-all duration-200
+      ${speaking&&micOn ? 'ring-2 ring-[#1a73e8]' : ''}`}>
+      {camOn ? (
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover"
+          autoPlay
+          muted={muted}
+          playsInline
+          controls={false}
+          disablePictureInPicture
+          style={{ WebkitUserSelect:'none', userSelect:'none' }}
+          onLoadedMetadata={() => videoRef.current?.play().catch(()=>{})}
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center bg-[#1c1c1c]">
+          <Avatar name={name} size="lg" />
+        </div>
+      )}
+      {/* Gradient overlay — pointer-events:none so no native controls */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
+      {/* Bottom bar */}
+      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+        <div className="flex items-center gap-2">
+          {!micOn && <div className="w-6 h-6 rounded-full bg-[#ea4335] flex items-center justify-center"><FaMicrophoneSlash className="text-white text-[10px]"/></div>}
+          <span className="text-white text-sm font-medium drop-shadow">{name}</span>
+        </div>
+        {pinned && <div className="w-6 h-6 rounded-full bg-[#1a73e8]/80 flex items-center justify-center pointer-events-auto"><TbPinned className="text-white text-xs"/></div>}
       </div>
-    )}
-    <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
-    <div className="absolute bottom-3 left-3 flex items-center gap-2">
-      {!micOn && <div className="w-6 h-6 rounded-full bg-[#ea4335] flex items-center justify-center"><FaMicrophoneSlash className="text-white text-[10px]"/></div>}
-      <span className="text-white text-sm font-medium drop-shadow">{name}</span>
     </div>
-  </div>
-);
+  );
+};
 
 // ── Filmstrip tile ────────────────────────────────────────────────────────────
-const FilmTile = ({ name, videoRef, stream, camOn, micOn, speaking, muted=false, onClick, active=false }) => (
-  <div onClick={onClick}
-    className={`relative shrink-0 w-[180px] h-[120px] rounded-lg overflow-hidden bg-[#2a2a2a] cursor-pointer
-      transition-all duration-150 hover:brightness-110
-      ${active ? 'ring-2 ring-[#1a73e8]' : speaking&&micOn ? 'ring-2 ring-[#1a73e8]/60' : 'ring-1 ring-white/10'}`}>
-    {camOn ? (
-      <video className="w-full h-full object-cover" autoPlay muted={muted} ref={videoRef}
-        onLoadedMetadata={e=>{ if(stream&&!e.target.srcObject) e.target.srcObject=stream; }} />
-    ) : (
-      <div className="w-full h-full flex items-center justify-center bg-[#2a2a2a]">
-        <Avatar name={name} size="md" />
-      </div>
-    )}
-    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
-    <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
-      <span className="text-white text-[11px] font-medium truncate drop-shadow">{name}</span>
-      <div className="flex items-center gap-1">
-        {speaking&&micOn && <HiVolumeUp className="text-[#1a73e8] text-sm"/>}
-        {!micOn && <FaMicrophoneSlash className="text-[#ea4335] text-xs"/>}
+const FilmTile = ({ name, stream, camOn, micOn, speaking, muted=false, onClick, onDoubleClick, active=false, pinned=false }) => {
+  const videoRef = useRef(null);
+  useEffect(()=>{
+    const el = videoRef.current;
+    if(!el) return;
+    if(stream && el.srcObject !== stream){ 
+      el.srcObject = stream; 
+      el.play().catch(()=>{});
+    }
+  },[stream]);
+
+  return (
+    <div
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      className={`relative shrink-0 w-[160px] h-[108px] rounded-lg overflow-hidden bg-[#2a2a2a] cursor-pointer
+        transition-all duration-150 hover:brightness-110 select-none
+        ${active ? 'ring-2 ring-[#1a73e8]' : speaking&&micOn ? 'ring-2 ring-[#1a73e8]/60' : 'ring-1 ring-white/10'}`}
+    >
+      {camOn ? (
+        <video
+          ref={videoRef}
+          className="w-full h-full object-contain bg-black"
+          autoPlay
+          muted={muted}
+          playsInline
+          controls={false}
+          disablePictureInPicture
+          style={{ WebkitUserSelect:'none', userSelect:'none', pointerEvents:'none' }}
+          onLoadedMetadata={() => videoRef.current?.play().catch(()=>{})}
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center bg-[#2a2a2a]">
+          <Avatar name={name} size="md" />
+        </div>
+      )}
+      {/* Overlay — pointer-events:none so browser never shows video controls */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" style={{pointerEvents:'none'}} />
+      <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between" style={{pointerEvents:'none'}}>
+        <span className="text-white text-[11px] font-medium truncate drop-shadow">{name}</span>
+        <div className="flex items-center gap-1">
+          {pinned && <TbPinned className="text-[#1a73e8] text-xs"/>}
+          {speaking&&micOn && <HiVolumeUp className="text-[#1a73e8] text-sm"/>}
+          {!micOn && <FaMicrophoneSlash className="text-[#ea4335] text-xs"/>}
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ── Control icon button ───────────────────────────────────────────────────────
 const CtrlBtn = ({ onClick, icon, label, red=false, active=true }) => (
   <button onClick={onClick} title={label}
     className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-150 text-lg
-      ${red ? 'bg-[#ea4335] text-white hover:bg-[#c5382b]'
-             : active ? 'bg-[#3c3c3c] text-white hover:bg-[#4a4a4a]'
-                      : 'bg-[#ea4335]/20 text-[#ea4335] hover:bg-[#ea4335]/30'}`}>
+      ${red ? 'bg-[#ea4335] text-white hover:bg-[#c5382b] active:scale-95'
+             : active ? 'bg-[#3c3c3c] text-white hover:bg-[#4a4a4a] active:scale-95'
+                      : 'bg-[#ea4335]/20 text-[#ea4335] hover:bg-[#ea4335]/30 active:scale-95'}`}>
     {icon}
   </button>
 );
@@ -218,25 +306,38 @@ const ChatPanel = ({ messages, msg, setMsg, sendMsg, flag, msgEndRef }) => (
 
 // ── Room ──────────────────────────────────────────────────────────────────────
 const Room = () => {
+  const navigate = useNavigate();
   const {
     email, code, handleJoin, dcRef, flag, streams,
     handleMSG, handleEndCall, captureScreen,
     localStreamRef, screenStreamRef, onMessageRef, emitMediaState,
-    peerStates, notifications, dismissNotification, displayShare,
+    peerStates, notifications, dismissNotification, displayShare, isCallAlive,
   } = useContext(SocketContext);
 
   const msgEndRef = useRef(null);
   const localVideoRef = useRef(null);
+  const screenVideoRef = useRef(null);
+  const screenFilmRef = useRef(null);
 
   const [msg, setMsg] = useState('');
-  const [panel, setPanel] = useState('participants'); // 'chat' | 'participants' | null
+  // Panels closed by default
+  const [panel, setPanel] = useState(null);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [messages, setMessages] = useState([]);
-  const [activeSpeaker, setActiveSpeaker] = useState('self'); // 'self' | peer index
+  const [activeSpeaker, setActiveSpeaker] = useState('self');
+  // Pin state: null = no pin, else same values as activeSpeaker
+  const [pinnedId, setPinnedId] = useState(null);
+  const wasCallAliveRef = useRef(false);
 
   useEffect(()=>{ msgEndRef.current?.scrollIntoView({behavior:'smooth'}); },[messages]);
   useEffect(()=>{ handleJoin(email,code); },[]);
+  useEffect(()=>{
+    if(wasCallAliveRef.current && !isCallAlive){
+      navigate('/', { replace: true });
+    }
+    wasCallAliveRef.current = isCallAlive;
+  },[isCallAlive, navigate]);
   useEffect(()=>{
     onMessageRef.current=(text)=>setMessages(p=>[...p,{text,self:false}]);
     return()=>{ onMessageRef.current=null; };
@@ -244,11 +345,32 @@ const Room = () => {
 
   // Attach local video
   useEffect(()=>{
-    const attach=()=>{ const s=localStreamRef?.current; if(s&&localVideoRef.current) localVideoRef.current.srcObject=s; };
+    const attach=()=>{
+      const s=localStreamRef?.current;
+      if(s && localVideoRef.current && localVideoRef.current.srcObject !== s){
+        localVideoRef.current.srcObject = s;
+        localVideoRef.current.play().catch(()=>{});
+      }
+    };
     attach();
-    const iv=setInterval(()=>{ if(localStreamRef?.current&&localVideoRef.current&&!localVideoRef.current.srcObject){attach();clearInterval(iv);} },300);
+    const iv=setInterval(()=>{
+      if(localStreamRef?.current && localVideoRef.current && !localVideoRef.current.srcObject){
+        attach(); clearInterval(iv);
+      }
+    },300);
     return()=>clearInterval(iv);
   },[]);
+
+  // Attach screen share video
+  useEffect(()=>{
+    const attachScreen = (el) => {
+      if(!el) return;
+      const s = screenStreamRef?.current;
+      if(s && el.srcObject !== s){ el.srcObject = s; el.play().catch(()=>{}); }
+    };
+    if(screenVideoRef.current) attachScreen(screenVideoRef.current);
+    if(screenFilmRef.current) attachScreen(screenFilmRef.current);
+  },[displayShare]);
 
   const toggleMic=useCallback(()=>{
     const s=localStreamRef?.current; if(!s)return;
@@ -263,182 +385,421 @@ const Room = () => {
   },[camOn,localStreamRef,emitMediaState]);
 
   const sendMsg=()=>{ if(!msg.trim())return; handleMSG(msg); setMessages(p=>[...p,{text:msg,self:true}]); setMsg(''); };
+  const leaveCall = useCallback(()=>{
+    handleEndCall();
+    navigate('/', { replace: true });
+  },[handleEndCall, navigate]);
 
   const localStream=localStreamRef?.current;
   const isSpeaking=useVAD(localStream,micOn);
   const remoteVideoStreams=streams.filter(s=>s.kind==='video');
   const peerEmails=Object.keys(peerStates);
 
-  // Auto-pin screen share tile when sharing starts/stops
+  // Handle pin logic
+  const handlePin = useCallback((id) => {
+    setPinnedId(prev => prev === id ? null : id);
+    setActiveSpeaker(id);
+  }, []);
+
+  // Auto-switch main view: pinned overrides, else screen share auto-pins when sharing starts
   useEffect(()=>{
+    if(pinnedId !== null) return; // user has pinned something, don't auto-switch
     if(displayShare) setActiveSpeaker('screen');
     else if(activeSpeaker==='screen') setActiveSpeaker('self');
+  },[displayShare, pinnedId]);
+
+  // If screen share stops and it was pinned, unpin
+  useEffect(()=>{
+    if(!displayShare && pinnedId === 'screen'){
+      setPinnedId(null);
+      setActiveSpeaker('self');
+    }
   },[displayShare]);
 
-  // Build filmstrip entries — screen share tile inserted after self when active
+  // Effective active speaker (pinned takes priority)
+  const effectiveActive = pinnedId !== null ? pinnedId : activeSpeaker;
+
+  // Build filmstrip entries
   const filmstrip = [
     { id:'self', name:email, isLocal:true },
-    ...(displayShare ? [{ id:'screen', name:`${email}'s screen`, isScreen:true }] : []),
+    ...(displayShare ? [{ id:'screen', name:`Your screen`, isScreen:true }] : []),
     ...remoteVideoStreams.map((s,i)=>({ id:i, name:peerEmails[i]||`Peer ${i+1}`, stream:s.mediaStream, ps:peerStates[peerEmails[i]]||{} }))
   ];
 
-  // Active speaker data
-  const activeTile = activeSpeaker==='self'
-    ? { name:email, isLocal:true, camOn, micOn, speaking:isSpeaking }
-    : activeSpeaker==='screen'
-    ? { name:`${email}'s screen`, isScreen:true }
-    : (() => {
-        const i = activeSpeaker;
-        const s = remoteVideoStreams[i];
-        const peerEmail = peerEmails[i];
-        const ps = peerStates[peerEmail]||{};
-        return { name:peerEmail||`Peer ${i+1}`, stream:s?.mediaStream, camOn:ps.cam!==false, micOn:ps.mic!==false, speaking:false };
-      })();
+  const activeFilm = filmstrip.find(f=>f.id===effectiveActive);
 
-  const msgCount = messages.filter(m=>!m.self).length;
+  // Active tile data
+  const activeTile = activeFilm?.isLocal
+    ? { name:email, isLocal:true, camOn, micOn, speaking:isSpeaking }
+    : activeFilm?.isScreen
+    ? { name:`Your screen`, isScreen:true }
+    : activeFilm
+    ? {
+        name:activeFilm.name,
+        stream:activeFilm.stream,
+        camOn:activeFilm.ps?.cam!==false,
+        micOn:activeFilm.ps?.mic!==false,
+        speaking:false
+      }
+    : { name:email, isLocal:true, camOn, micOn, speaking:isSpeaking };
+
+  // Mobile panel overlay state
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+
+  const togglePanel = (tab) => {
+    if(panel === tab && !mobilePanelOpen) { setPanel(null); return; }
+    setPanel(tab);
+    setMobilePanelOpen(true);
+  };
 
   return (
-    <div className="w-full h-screen flex flex-col bg-[#1c1c1c] text-white overflow-hidden" style={{fontFamily:'Google Sans, Roboto, sans-serif'}}>
+    <div className="w-full h-screen flex flex-col bg-[#1c1c1c] text-white overflow-hidden" style={{fontFamily:'Google Sans, Roboto, sans-serif', touchAction:'manipulation'}}>
 
       {/* Toasts */}
-      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none" style={{maxWidth:'280px'}}>
         {notifications.map(n=>(
           <div key={n.id} className="pointer-events-auto"><Toast n={n} onDismiss={dismissNotification}/></div>
         ))}
       </div>
 
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-[#202020] border-b border-[#3a3a3a] shrink-0 h-14">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between px-3 py-2 bg-[#202020] border-b border-[#3a3a3a] shrink-0 h-12 md:h-14">
+        <div className="flex items-center gap-2">
           <div>
-            <div className="text-xs text-[#aaa] leading-none">Room</div>
-            <div className="text-sm font-medium text-white leading-tight truncate max-w-[200px]">{code}</div>
+            <div className="text-[10px] text-[#aaa] leading-none">Room</div>
+            <div className="text-xs md:text-sm font-medium text-white leading-tight truncate max-w-[140px] md:max-w-[200px]">{code}</div>
           </div>
         </div>
-        <div className="flex items-center gap-1 text-sm">
-          <button onClick={()=>setPanel(p=>p==='chat'?null:'chat')}
-            className={`px-4 py-1.5 rounded-full transition-colors ${panel==='chat'?'bg-[#3c3c3c] text-white':'text-[#aaa] hover:bg-[#2a2a2a]'}`}>
+        <div className="flex items-center gap-1 text-xs md:text-sm">
+          <button onClick={()=>togglePanel('chat')}
+            className={`px-3 py-1 rounded-full transition-colors ${panel==='chat'?'bg-[#3c3c3c] text-white':'text-[#aaa] hover:bg-[#2a2a2a]'}`}>
             Chat
           </button>
-          <button onClick={()=>setPanel(p=>p==='participants'?null:'participants')}
-            className={`px-4 py-1.5 rounded-full transition-colors ${panel==='participants'?'bg-[#3c3c3c] text-white':'text-[#aaa] hover:bg-[#2a2a2a]'}`}>
-            Participants {peerEmails.length+1>0&&<span className="ml-1 text-xs text-[#aaa]">{peerEmails.length+1}</span>}
+          <button onClick={()=>togglePanel('participants')}
+            className={`px-3 py-1 rounded-full transition-colors ${panel==='participants'?'bg-[#3c3c3c] text-white':'text-[#aaa] hover:bg-[#2a2a2a]'}`}>
+            People {peerEmails.length+1>0&&<span className="ml-0.5 text-[10px] text-[#aaa]">{peerEmails.length+1}</span>}
           </button>
         </div>
-        <div className="text-xs text-[#aaa] tabular-nums">
+        <div className="text-[10px] md:text-xs text-[#aaa] tabular-nums hidden sm:block">
           {new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
         </div>
       </div>
 
       {/* Body */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden relative">
 
         {/* Left: video + filmstrip */}
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
 
           {/* Main speaker */}
-          <div className="flex-1 min-h-0 p-3 pb-1">
+          <div className="flex-1 min-h-0 p-2 pb-1">
             {activeTile.isScreen ? (
               <div className="relative w-full h-full rounded-xl overflow-hidden bg-[#111]">
-                <video className="w-full h-full object-contain" autoPlay muted
-                  ref={el=>{ if(el&&screenStreamRef?.current&&!el.srcObject) el.srcObject=screenStreamRef.current; }}
-                  onLoadedMetadata={e=>{ if(screenStreamRef?.current&&!e.target.srcObject) e.target.srcObject=screenStreamRef.current; }}
+                <video
+                  ref={screenVideoRef}
+                  className="w-full h-full object-contain"
+                  autoPlay
+                  muted
+                  playsInline
+                  controls={false}
+                  disablePictureInPicture
+                  style={{ WebkitUserSelect:'none', userSelect:'none' }}
+                  onLoadedMetadata={() => screenVideoRef.current?.play().catch(()=>{})}
                 />
-                <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/50 px-2 py-1 rounded-md">
+                <div className="absolute inset-0 pointer-events-none" />
+                <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/50 px-2 py-1 rounded-md pointer-events-none">
                   <MdScreenShare className="text-[#1a73e8] text-sm"/>
                   <span className="text-white text-xs font-medium">You are presenting</span>
                 </div>
+                {pinnedId === 'screen' && (
+                  <div className="absolute top-3 right-3 bg-[#1a73e8]/80 rounded-full px-2 py-1 flex items-center gap-1 pointer-events-none">
+                    <TbPinned className="text-white text-xs"/>
+                    <span className="text-white text-[10px]">Pinned</span>
+                  </div>
+                )}
               </div>
             ) : activeTile.isLocal ? (
-              <SpeakerTile name={activeTile.name} videoRef={localVideoRef}
-                camOn={activeTile.camOn} micOn={activeTile.micOn} speaking={activeTile.speaking} muted />
+              <div className={`relative w-full h-full rounded-xl overflow-hidden bg-[#1c1c1c] transition-all duration-200
+                ${activeTile.speaking && activeTile.micOn ? 'ring-2 ring-[#1a73e8]' : ''}`}>
+                {camOn ? (
+                  <video
+                    ref={localVideoRef}
+                    className="w-full h-full object-cover"
+                    autoPlay
+                    muted
+                    playsInline
+                    controls={false}
+                    disablePictureInPicture
+                    style={{ WebkitUserSelect:'none', userSelect:'none' }}
+                    onLoadedMetadata={() => localVideoRef.current?.play().catch(()=>{})}
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <Avatar name={email} size="lg" />
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none"/>
+                <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+                  <div className="flex items-center gap-2">
+                    {!micOn && <div className="w-6 h-6 rounded-full bg-[#ea4335] flex items-center justify-center"><FaMicrophoneSlash className="text-white text-[10px]"/></div>}
+                    <span className="text-white text-sm font-medium drop-shadow">{email} (You)</span>
+                  </div>
+                  {pinnedId === 'self' && <TbPinned className="text-[#1a73e8] text-sm"/>}
+                </div>
+              </div>
             ) : (
-              <SpeakerTile name={activeTile.name} stream={activeTile.stream}
-                camOn={activeTile.camOn} micOn={activeTile.micOn} speaking={activeTile.speaking}
-                videoRef={el=>{ if(el&&activeTile.stream&&!el.srcObject) el.srcObject=activeTile.stream; }} />
+              <RemoteSpeakerTile
+                name={activeTile.name}
+                stream={activeTile.stream}
+                camOn={activeTile.camOn}
+                micOn={activeTile.micOn}
+                speaking={activeTile.speaking}
+                pinned={pinnedId === effectiveActive}
+              />
             )}
           </div>
 
           {/* Filmstrip */}
-          <div className="shrink-0 px-3 pb-2">
-            <div className="flex gap-2 overflow-x-auto scrollbar-none py-3 px-1">
-              {filmstrip.map((f,idx)=>{
-                const isActive = f.id==='self' ? activeSpeaker==='self' : f.id==='screen' ? activeSpeaker==='screen' : activeSpeaker===f.id;
+          <div className="shrink-0 px-2 pb-1">
+            <div className="flex gap-2 overflow-x-auto scrollbar-none py-2 px-0.5">
+              {filmstrip.map((f)=>{
+                const isActive = f.id === effectiveActive;
+                const isPinned = f.id === pinnedId;
+
                 if(f.isLocal) return (
-                  <FilmTile key="self" name={email} videoRef={el=>{
-                      if(el&&localStreamRef?.current&&!el.srcObject) el.srcObject=localStreamRef.current;
-                    }}
-                    camOn={camOn} micOn={micOn} speaking={isSpeaking} muted
-                    active={isActive} onClick={()=>setActiveSpeaker('self')} />
-                );
-                if(f.isScreen) return (
-                  <div key="screen" onClick={()=>setActiveSpeaker('screen')}
-                    className={`relative shrink-0 w-[180px] h-[120px] rounded-lg overflow-hidden bg-[#111] cursor-pointer
-                      transition-all hover:brightness-110 border
-                      ${isActive?'border-[#1a73e8]':'border-white/10'}`}>
-                    <video className="w-full h-full object-contain" autoPlay muted
-                      ref={el=>{ if(el&&screenStreamRef?.current&&!el.srcObject) el.srcObject=screenStreamRef.current; }}
+                  <div key="self" className="shrink-0">
+                    <LocalFilmTile
+                      name={email}
+                      localVideoRef={localVideoRef}
+                      localStreamRef={localStreamRef}
+                      camOn={camOn}
+                      micOn={micOn}
+                      speaking={isSpeaking}
+                      active={isActive}
+                      pinned={isPinned}
+                      onClick={()=>setActiveSpeaker('self')}
+                      onDoubleClick={()=>handlePin('self')}
                     />
-                    <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1">
+                  </div>
+                );
+
+                if(f.isScreen) return (
+                  <div key="screen"
+                    onClick={()=>setActiveSpeaker('screen')}
+                    onDoubleClick={()=>handlePin('screen')}
+                    className={`relative shrink-0 w-[160px] h-[108px] rounded-lg overflow-hidden bg-[#111] cursor-pointer
+                      transition-all hover:brightness-110 border select-none
+                      ${isActive?'border-[#1a73e8]':'border-white/10'}`}>
+                    <video
+                      ref={screenFilmRef}
+                      className="w-full h-full object-contain"
+                      autoPlay muted playsInline
+                      controls={false}
+                      disablePictureInPicture
+                      style={{ WebkitUserSelect:'none', userSelect:'none', pointerEvents:'none' }}
+                      onLoadedMetadata={() => screenFilmRef.current?.play().catch(()=>{})}
+                    />
+                    <div className="absolute inset-0" style={{pointerEvents:'none'}}/>
+                    <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1" style={{pointerEvents:'none'}}>
                       <MdScreenShare className="text-[#1a73e8] text-xs shrink-0"/>
                       <span className="text-white text-[11px] font-medium truncate">Your screen</span>
+                      {isPinned && <TbPinned className="text-[#1a73e8] text-xs ml-auto"/>}
                     </div>
                   </div>
                 );
+
                 const ps=f.ps||{};
                 return (
                   <FilmTile key={f.id} name={f.name}
                     stream={f.stream}
-                    videoRef={el=>{ if(el&&f.stream&&!el.srcObject) el.srcObject=f.stream; }}
                     camOn={ps.cam!==false} micOn={ps.mic!==false} speaking={false}
-                    active={isActive} onClick={()=>setActiveSpeaker(f.id)} />
+                    active={isActive} pinned={isPinned}
+                    onClick={()=>setActiveSpeaker(f.id)}
+                    onDoubleClick={()=>handlePin(f.id)}
+                  />
                 );
               })}
             </div>
           </div>
 
           {/* Controls */}
-          <div className="shrink-0 flex items-center justify-center gap-3 py-3 border-t border-[#2a2a2a] bg-[#202020]">
+          <div className="shrink-0 flex items-center justify-center gap-2 md:gap-3 py-3 border-t border-[#2a2a2a] bg-[#202020]">
             <CtrlBtn onClick={toggleCam} icon={camOn?<BsCameraVideo/>:<BsCameraVideoOff/>}
               label={camOn?'Turn off camera':'Turn on camera'} active={camOn} />
             <CtrlBtn onClick={toggleMic} icon={micOn?<FaMicrophone/>:<FaMicrophoneSlash/>}
               label={micOn?'Mute':'Unmute'} active={micOn} />
-            <CtrlBtn onClick={captureScreen} icon={displayShare?<MdStopScreenShare/>:<MdScreenShare/>}
-              label={displayShare?'Stop sharing':'Share screen'} active={!displayShare} />
-            <CtrlBtn onClick={()=>setPanel(p=>p?null:'participants')} icon={<MdMoreVert/>} label="More options" active />
-            <CtrlBtn onClick={handleEndCall} icon={<ImPhoneHangUp/>} label="Leave call" red />
+            {/* Screen share button — shows stop icon when actively sharing */}
+            <CtrlBtn
+              onClick={captureScreen}
+              icon={displayShare ? <MdStopScreenShare /> : <MdScreenShare />}
+              label={displayShare ? 'Stop sharing screen' : 'Share screen'}
+              active={displayShare}
+              // Highlight red when sharing so user knows to click to stop
+              red={displayShare}
+            />
+            <CtrlBtn onClick={leaveCall} icon={<ImPhoneHangUp/>} label="Leave call" red />
           </div>
         </div>
 
-        {/* Right panel */}
+        {/* Right panel — desktop: sidebar, mobile: overlay */}
         {panel && (
-          <div className="w-[300px] shrink-0 flex flex-col bg-[#242424] border-l border-[#3a3a3a] overflow-hidden">
-            {/* Panel tabs */}
-            <div className="flex border-b border-[#3a3a3a] shrink-0">
-              {['chat','participants'].map(tab=>(
-                <button key={tab} onClick={()=>setPanel(tab)}
-                  className={`flex-1 py-3 text-sm font-medium capitalize transition-colors relative
-                    ${panel===tab?'text-[#1a73e8]':'text-[#aaa] hover:text-[#e0e0e0]'}`}>
-                  {tab==='chat'?'Chat':'Participants'}
-                  {panel===tab && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1a73e8]"/>}
-                </button>
-              ))}
+          <>
+            {/* Mobile backdrop */}
+            <div
+              className="fixed inset-0 bg-black/50 z-30 md:hidden"
+              onClick={()=>{ setPanel(null); setMobilePanelOpen(false); }}
+            />
+            <div className={`
+              z-40 flex flex-col bg-[#242424] border-[#3a3a3a] overflow-hidden
+              md:relative md:w-[300px] md:shrink-0 md:border-l
+              fixed bottom-0 left-0 right-0 h-[70vh] rounded-t-2xl border-t
+              md:top-auto md:h-auto md:rounded-none md:inset-auto
+            `}>
+              {/* Panel tabs */}
+              <div className="flex border-b border-[#3a3a3a] shrink-0">
+                {/* Mobile drag handle */}
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 bg-[#4a4a4a] rounded-full md:hidden"/>
+                {['chat','participants'].map(tab=>(
+                  <button key={tab} onClick={()=>setPanel(tab)}
+                    className={`flex-1 py-3 pt-5 md:pt-3 text-sm font-medium capitalize transition-colors relative
+                      ${panel===tab?'text-[#1a73e8]':'text-[#aaa] hover:text-[#e0e0e0]'}`}>
+                    {tab==='chat'?'Chat':'Participants'}
+                    {panel===tab && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1a73e8]"/>}
+                  </button>
+                ))}
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {panel==='participants'
+                  ? <ParticipantsPanel self={email} peers={peerEmails} peerStates={peerStates}/>
+                  : <ChatPanel messages={messages} msg={msg} setMsg={setMsg} sendMsg={sendMsg} flag={flag} msgEndRef={msgEndRef}/>
+                }
+              </div>
             </div>
-            <div className="flex-1 min-h-0 overflow-hidden">
-              {panel==='participants'
-                ? <ParticipantsPanel self={email} peers={peerEmails} peerStates={peerStates}/>
-                : <ChatPanel messages={messages} msg={msg} setMsg={setMsg} sendMsg={sendMsg} flag={flag} msgEndRef={msgEndRef}/>
-              }
-            </div>
-          </div>
+          </>
         )}
       </div>
 
+      {/* Pin hint — shows briefly when pinning */}
+      {pinnedId !== null && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 bg-black/70 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-1 pointer-events-none"
+          style={{animation:'toast-in 0.2s ease forwards'}}>
+          <TbPinned className="text-[#1a73e8]"/>
+          Pinned — double-click again to unpin
+        </div>
+      )}
+
       <style>{`
-        @keyframes toast-in { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes toast-in { from{opacity:0;transform:translateY(-8px) translateX(-50%)} to{opacity:1;transform:translateY(0) translateX(-50%)} }
         .scrollbar-none::-webkit-scrollbar { display:none; }
         .scrollbar-none { -ms-overflow-style:none; scrollbar-width:none; }
+        /* Force-hide native video controls on all browsers */
+        video::-webkit-media-controls { display:none !important; }
+        video::-webkit-media-controls-enclosure { display:none !important; }
+        video::-webkit-media-controls-panel { display:none !important; }
+        video::--moz-range-thumb { display:none !important; }
+        video { -webkit-appearance:none; }
       `}</style>
+    </div>
+  );
+};
+
+// ── Remote speaker tile (separate to handle stream attachment) ────────────────
+const RemoteSpeakerTile = ({ name, stream, camOn, micOn, speaking, pinned }) => {
+  const videoRef = useRef(null);
+  useEffect(()=>{
+    const el = videoRef.current;
+    if(!el || !stream) return;
+    if(el.srcObject !== stream){ el.srcObject = stream; el.play().catch(()=>{}); }
+  },[stream]);
+
+  return (
+    <div className={`relative w-full h-full rounded-xl overflow-hidden bg-[#1c1c1c] transition-all duration-200
+      ${speaking&&micOn ? 'ring-2 ring-[#1a73e8]' : ''}`}>
+      {camOn && stream ? (
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover"
+          autoPlay
+          playsInline
+          controls={false}
+          disablePictureInPicture
+          style={{ WebkitUserSelect:'none', userSelect:'none' }}
+          onLoadedMetadata={() => videoRef.current?.play().catch(()=>{})}
+          // NOTE: NOT muted — remote audio should play
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center">
+          <Avatar name={name} size="lg" />
+        </div>
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none"/>
+      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+        <div className="flex items-center gap-2">
+          {!micOn && <div className="w-6 h-6 rounded-full bg-[#ea4335] flex items-center justify-center"><FaMicrophoneSlash className="text-white text-[10px]"/></div>}
+          <span className="text-white text-sm font-medium drop-shadow">{name}</span>
+        </div>
+        {pinned && <TbPinned className="text-[#1a73e8] text-sm"/>}
+      </div>
+    </div>
+  );
+};
+
+// ── Local filmstrip tile (uses passed ref to avoid double-attaching) ──────────
+const LocalFilmTile = ({ name, localVideoRef, localStreamRef, camOn, micOn, speaking, active, pinned, onClick, onDoubleClick }) => {
+  const filmRef = useRef(null);
+  useEffect(()=>{
+    const attach = () => {
+      const el = filmRef.current;
+      const s = localStreamRef?.current;
+      if(!el || !s) return false;
+      if(el.srcObject !== s){
+        el.srcObject = s;
+        el.play().catch(()=>{});
+      }
+      return true;
+    };
+
+    if(attach()) return;
+
+    const iv = setInterval(()=>{
+      if(attach()) clearInterval(iv);
+    }, 250);
+
+    return ()=>clearInterval(iv);
+  },[localStreamRef]);
+
+  return (
+    <div
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      className={`relative shrink-0 w-[160px] h-[108px] rounded-lg overflow-hidden bg-[#2a2a2a] cursor-pointer
+        transition-all duration-150 hover:brightness-110 select-none
+        ${active ? 'ring-2 ring-[#1a73e8]' : speaking&&micOn ? 'ring-2 ring-[#1a73e8]/60' : 'ring-1 ring-white/10'}`}
+    >
+      {camOn ? (
+        <video
+          ref={filmRef}
+          className="w-full h-full object-contain bg-black"
+          autoPlay muted playsInline
+          controls={false}
+          disablePictureInPicture
+          style={{ WebkitUserSelect:'none', userSelect:'none', pointerEvents:'none' }}
+          onLoadedMetadata={() => filmRef.current?.play().catch(()=>{})}
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center bg-[#2a2a2a]">
+          <Avatar name={name} size="md" />
+        </div>
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" style={{pointerEvents:'none'}}/>
+      <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between" style={{pointerEvents:'none'}}>
+        <span className="text-white text-[11px] font-medium truncate drop-shadow">{name} (You)</span>
+        <div className="flex items-center gap-1">
+          {pinned && <TbPinned className="text-[#1a73e8] text-xs"/>}
+          {speaking&&micOn && <HiVolumeUp className="text-[#1a73e8] text-sm"/>}
+          {!micOn && <FaMicrophoneSlash className="text-[#ea4335] text-xs"/>}
+        </div>
+      </div>
     </div>
   );
 };
